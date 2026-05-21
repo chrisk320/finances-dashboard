@@ -28,10 +28,9 @@ type Props = {
 const AUTO_STOCK = new Set([
   "earnings-reviewer",
   "market-researcher",
-  "predmkt-agent",
   "intel-hub",
 ]);
-const AUTO_CRYPTO = new Set(["coingecko-agent", "predmkt-agent", "intel-hub"]);
+const AUTO_CRYPTO = new Set(["coingecko-agent", "intel-hub"]);
 
 export default function ResultPage({
   mode,
@@ -93,23 +92,30 @@ export default function ResultPage({
             </span>
           </div>
           {price > 0 && (
-            <div className="flex items-center gap-3 mt-1">
-              <span className="text-[18px] font-mono text-text-primary">
-                {fmtPrice(price)}
-              </span>
-              <span
-                className="text-[13px] font-mono"
-                style={{ color: pctColor(changePct) }}
-              >
-                {pct(changePct)}
-              </span>
-              {sparkline && sparkline.length > 1 && (
-                <Sparkline
-                  data={sparkline}
-                  color={pctColor(changePct)}
-                  width={120}
-                  height={30}
-                />
+            <div className="flex flex-col gap-0.5 mt-1">
+              <div className="flex items-center gap-3">
+                <span className="text-[18px] font-mono text-text-primary">
+                  {fmtPrice(price)}
+                </span>
+                <span
+                  className="text-[13px] font-mono"
+                  style={{ color: pctColor(changePct) }}
+                >
+                  {pct(changePct)}
+                </span>
+                {sparkline && sparkline.length > 1 && (
+                  <Sparkline
+                    data={sparkline}
+                    color={pctColor(changePct)}
+                    width={120}
+                    height={30}
+                  />
+                )}
+              </div>
+              {!isCrypto && (
+                <span className="text-[10px] uppercase tracking-[0.12em] text-text-dim font-mono">
+                  Regular session · Finnhub free tier (no after-hours / pre-market)
+                </span>
               )}
             </div>
           )}

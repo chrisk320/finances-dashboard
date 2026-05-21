@@ -241,28 +241,87 @@ async function runPredictionMarkets(symbol: string): Promise<AgentFinding> {
   }
 }
 
+async function coingecko<T = any>(path: string): Promise<T> {
+  const res = await fetch(`/api/coingecko?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`coingecko ${res.status}`);
+  return res.json();
+}
+
+type LiveCoin = {
+  id: string;
+  symbol: string;
+  name: string;
+  current_price: number;
+  market_cap: number;
+  price_change_percentage_1h_in_currency?: number;
+  price_change_percentage_24h?: number;
+  price_change_percentage_7d_in_currency?: number;
+  sparkline_in_7d?: { price: number[] };
+};
+
+async function fetchCoinGeckoCoin(symbol: string): Promise<LiveCoin | null> {
+  const s = symbol.toLowerCase();
+  try {
+    const search = await coingecko<{ coins?: { id: string; symbol: string }[] }>(
+      `/search?query=${encodeURIComponent(s)}`
+    );
+    const match =
+      search.coins?.find((c) => c.symbol.toLowerCase() === s) ??
+      search.coins?.[0];
+    if (!match) return null;
+    const markets = await coingecko<LiveCoin[]>(
+      `/coins/markets?vs_currency=usd&ids=${encodeURIComponent(
+        match.id
+      )}&sparkline=true&price_change_percentage=1h,24h,7d`
+    );
+    return Array.isArray(markets) && markets[0] ? markets[0] : null;
+  } catch (e) {
+    console.error("[fetchCoinGeckoCoin]", e);
+    return null;
+  }
+}
+
 async function runCryptoIntelligence(symbol: string): Promise<{
   finding: AgentFinding;
   priceData: CryptoResearchResult["priceData"];
 }> {
-  const coin = findCoinBySymbol(symbol);
-  const priceData = coin
+  // Always prefer live CoinGecko data. Fall back to the seeded snapshot
+  // only if the API is unreachable — seeds are months stale.
+  const live = await fetchCoinGeckoCoin(symbol);
+  const seeded = live ? null : findCoinBySymbol(symbol);
+
+  const priceData = live
     ? {
-        price: coin.current_price,
-        change24h: coin.price_change_percentage_24h,
+        price: live.current_price,
+        change24h: live.price_change_percentage_24h ?? 0,
+        marketCap: live.market_cap ?? 0,
+        sparkline: live.sparkline_in_7d?.price ?? [],
+      }
+    : seeded
+    ? {
+        price: seeded.current_price,
+        change24h: seeded.price_change_percentage_24h,
         marketCap: 0,
-        sparkline: coin.sparkline_in_7d.price,
+        sparkline: seeded.sparkline_in_7d.price,
       }
     : { price: 0, change24h: 0, marketCap: 0, sparkline: [] };
 
   try {
-    const ctx = coin
-      ? `${coin.name} (${coin.symbol.toUpperCase()})\nPrice: $${coin.current_price}\n1h: ${coin.price_change_percentage_1h_in_currency?.toFixed(
+    const ctx = live
+      ? `${live.name} (${live.symbol.toUpperCase()})\nPrice: $${live.current_price}\nMarket cap: $${(
+          (live.market_cap ?? 0) / 1e9
+        ).toFixed(2)}B\n1h: ${live.price_change_percentage_1h_in_currency?.toFixed(
           2
-        )}%, 24h: ${coin.price_change_percentage_24h?.toFixed(
+        )}%, 24h: ${live.price_change_percentage_24h?.toFixed(
           2
-        )}%, 7d: ${coin.price_change_percentage_7d_in_currency?.toFixed(2)}%`
-      : `Symbol: ${symbol} — no live snapshot available, infer general crypto context.`;
+        )}%, 7d: ${live.price_change_percentage_7d_in_currency?.toFixed(2)}%`
+      : seeded
+      ? `${seeded.name} (${seeded.symbol.toUpperCase()}) — STALE SEEDED DATA (CoinGecko fetch failed)\nPrice: $${seeded.current_price}\n1h: ${seeded.price_change_percentage_1h_in_currency?.toFixed(
+          2
+        )}%, 24h: ${seeded.price_change_percentage_24h?.toFixed(
+          2
+        )}%, 7d: ${seeded.price_change_percentage_7d_in_currency?.toFixed(2)}%`
+      : `Symbol: ${symbol} — no CoinGecko match. Likely a very new or obscure token; infer general context cautiously and flag the data gap.`;
     const market = `BTC dom ${LIVE_DATA.global.btc_dominance.toFixed(
       1
     )}% · Total cap ${(LIVE_DATA.global.total_market_cap_usd / 1e12).toFixed(
@@ -271,7 +330,10 @@ async function runCryptoIntelligence(symbol: string): Promise<{
     const system = `You are the Crypto Intelligence agent. You combine price action, dominance shifts, and broader crypto narratives into a clear read for a long-term crypto investor.`;
     const user = `Asset: ${symbol}\n\nLive snapshot:\n${ctx}\n\nMarket context: ${market}\n\nWrite a 3-4 sentence summary covering:\n- Trend direction (multi-week)\n- Notable strength/weakness vs market\n- One thing to watch for the long-term thesis\n\nUnder 100 words.`;
     const summary = await callClaude(system, user, 600);
-    return { finding: makeFinding("coingecko-agent", summary, "done", coin), priceData };
+    return {
+      finding: makeFinding("coingecko-agent", summary, "done", live ?? seeded),
+      priceData,
+    };
   } catch (e: any) {
     return {
       finding: {
@@ -365,9 +427,8 @@ export async function runStockResearch(
   const progress = opts.onProgress ?? (() => {});
   progress("earnings-reviewer", "running");
   progress("market-researcher", "running");
-  progress("predmkt-agent", "running");
 
-  const [quote, earnings, market, pred] = await Promise.all([
+  const [quote, earnings, market] = await Promise.all([
     fetchFinnhubQuote(key).catch(() => ({ price: 0, change: 0, changePct: 0 })),
     runEarningsReviewer(key).then((f) => {
       progress("earnings-reviewer", f.status, f);
@@ -377,13 +438,9 @@ export async function runStockResearch(
       progress("market-researcher", f.status, f);
       return f;
     }),
-    runPredictionMarkets(key).then((f) => {
-      progress("predmkt-agent", f.status, f);
-      return f;
-    }),
   ]);
 
-  const findings: AgentFinding[] = [earnings, market, pred];
+  const findings: AgentFinding[] = [earnings, market];
 
   progress("intel-hub", "running");
   const verdict = await runIntelligenceHubStock(key, quote, findings);
@@ -414,20 +471,15 @@ export async function runCryptoResearch(
 
   const progress = opts.onProgress ?? (() => {});
   progress("coingecko-agent", "running");
-  progress("predmkt-agent", "running");
 
-  const [{ finding: cryptoFinding, priceData }, pred] = await Promise.all([
-    runCryptoIntelligence(symbol).then((r) => {
-      progress("coingecko-agent", r.finding.status, r.finding);
-      return r;
-    }),
-    runPredictionMarkets(symbol).then((f) => {
-      progress("predmkt-agent", f.status, f);
-      return f;
-    }),
-  ]);
+  const { finding: cryptoFinding, priceData } = await runCryptoIntelligence(
+    symbol
+  ).then((r) => {
+    progress("coingecko-agent", r.finding.status, r.finding);
+    return r;
+  });
 
-  const findings: AgentFinding[] = [cryptoFinding, pred];
+  const findings: AgentFinding[] = [cryptoFinding];
 
   progress("intel-hub", "running");
   const verdict = await runIntelligenceHubCrypto(symbol, findings);

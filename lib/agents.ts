@@ -208,13 +208,11 @@ export const AGENTS: Agent[] = [
 export const STOCK_AUTO_AGENTS = [
   "earnings-reviewer",
   "market-researcher",
-  "predmkt-agent",
   "intel-hub",
 ] as const;
 
 export const CRYPTO_AUTO_AGENTS = [
   "coingecko-agent",
-  "predmkt-agent",
   "intel-hub",
 ] as const;
 

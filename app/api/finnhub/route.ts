@@ -13,8 +13,15 @@ export async function GET(req: Request) {
   const separator = path.includes("?") ? "&" : "?";
   const url = `https://finnhub.io/api/v1${path}${separator}token=${key}`;
 
+  // Quotes change minute-to-minute — never cache. Other endpoints (news,
+  // earnings calendar) are stable enough to hold for an hour.
+  const isQuote = path.startsWith("/quote");
+  const fetchInit: RequestInit = isQuote
+    ? { cache: "no-store" }
+    : { next: { revalidate: 3600 } };
+
   try {
-    const res = await fetch(url, { next: { revalidate: 3600 } });
+    const res = await fetch(url, fetchInit);
     const data = await res.json();
     return Response.json(data, { status: res.status });
   } catch (e: any) {
