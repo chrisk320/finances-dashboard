@@ -1,15 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AgentsGrid from "./AgentsGrid";
+import PortfolioView from "./PortfolioView";
 import ResultPage from "./ResultPage";
 import SearchSidebar, { pushRecent } from "./SearchSidebar";
 import {
+  cacheTtlMs,
   clearCache,
   runAgentManually,
   runCryptoResearch,
   runStockResearch,
 } from "@/lib/orchestrator";
+import { loadWatchlist, recordVerdict } from "@/lib/watchlist";
 import type {
   AgentFinding,
   AgentStatus,
@@ -19,7 +22,10 @@ import type {
   StockResearchResult,
 } from "@/lib/types";
 
-type Tab = "stocks" | "crypto" | "agents";
+const POLL_INTERVAL_MS = 5 * 60 * 1000;
+const BACKGROUND_DELAY_MS = 1500;
+
+type Tab = "stocks" | "crypto" | "portfolio" | "agents";
 
 export default function ResearchEngine() {
   const [tab, setTab] = useState<Tab>("stocks");
@@ -31,6 +37,7 @@ export default function ResearchEngine() {
   const [liveFindings, setLiveFindings] = useState<AgentFinding[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshingSymbol, setRefreshingSymbol] = useState<string | null>(null);
 
   const mode: AssetMode = tab === "crypto" ? "crypto" : "stocks";
   const currentSymbol = mode === "crypto" ? cryptoSymbol : stockSymbol;
@@ -71,14 +78,17 @@ export default function ResearchEngine() {
             onProgress,
           });
           setCryptoResult(res);
+          recordVerdict(symbol, mode, res.verdict);
         } else {
           const res = await runStockResearch(symbol, {
             force: opts.force,
             onProgress,
           });
           setStockResult(res);
+          recordVerdict(symbol, mode, res.verdict);
         }
         pushRecent(symbol, mode);
+        window.dispatchEvent(new Event("watchlist:change"));
       } catch (e: any) {
         setError(e?.message ?? "Research failed.");
       } finally {
@@ -158,13 +168,71 @@ export default function ResearchEngine() {
     setError(null);
   }, [tab]);
 
+  // Background watchlist poller — coarse 5-min tick, only re-runs items whose
+  // last check is older than the orchestrator cache TTL (4h). Skips when the
+  // tab isn't visible. Sequential with a small delay so we don't fan out
+  // parallel Claude calls.
+  const pollingRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+
+    async function tick() {
+      if (cancelled || pollingRef.current) return;
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      const watchlist = loadWatchlist();
+      const stale = watchlist.filter(
+        (item) =>
+          !item.lastChecked || Date.now() - item.lastChecked > cacheTtlMs
+      );
+      if (stale.length === 0) return;
+
+      pollingRef.current = true;
+      try {
+        for (const item of stale) {
+          if (cancelled) break;
+          setRefreshingSymbol(item.symbol);
+          try {
+            const result =
+              item.mode === "crypto"
+                ? await runCryptoResearch(item.symbol)
+                : await runStockResearch(item.symbol);
+            recordVerdict(item.symbol, item.mode, result.verdict);
+            window.dispatchEvent(new Event("watchlist:change"));
+          } catch (e) {
+            console.error("[watchlist poller]", item.symbol, e);
+          }
+          await new Promise((r) => setTimeout(r, BACKGROUND_DELAY_MS));
+        }
+      } finally {
+        setRefreshingSymbol(null);
+        pollingRef.current = false;
+      }
+    }
+
+    // Run once on mount, then on a coarse interval.
+    void tick();
+    const interval = setInterval(() => void tick(), POLL_INTERVAL_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
   return (
     <div className="flex flex-col h-screen bg-bg-page">
       <nav className="flex items-center gap-2 px-6 py-3 border-b border-border bg-bg-panel">
         <div className="text-[13px] font-mono font-bold tracking-wide text-text-primary mr-6">
           ⌁ Research Engine
         </div>
-        {(["stocks", "crypto", "agents"] as Tab[]).map((t) => (
+        {(["stocks", "crypto", "portfolio", "agents"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -184,12 +252,20 @@ export default function ResearchEngine() {
 
       {tab === "agents" ? (
         <AgentsGrid />
+      ) : tab === "portfolio" ? (
+        <PortfolioView
+          onOpenTicker={(t) => {
+            setTab("stocks");
+            handleSearch(t);
+          }}
+        />
       ) : (
         <div className="flex flex-1 overflow-hidden">
           <SearchSidebar
             mode={mode}
             status={status}
             current={currentSymbol}
+            refreshingSymbol={refreshingSymbol}
             onSearch={handleSearch}
           />
           {currentSymbol ? (

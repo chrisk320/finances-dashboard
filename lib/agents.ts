@@ -71,6 +71,20 @@ export const AGENTS: Agent[] = [
     security_tier: "Tier 1 — Read Only",
   },
   {
+    slug: "news-analyst",
+    name: "News Analyst",
+    vertical: "Research & Coverage",
+    icon: "📰",
+    color: "#FB923C",
+    description:
+      "Scans company and sector headlines, classifies thesis-relevant events as positive/negative for a long-term holder, and produces a one-line rationale per event.",
+    skills: ["event-impact", "sector-news", "thesis-mapping", "headline-curation"],
+    commands: ["/events", "/sector-news", "/impact"],
+    connectors: ["Finnhub /company-news", "SPDR sector ETFs"],
+    subagents: ["headline-fetcher", "impact-classifier"],
+    security_tier: "Tier 1 — Read Only",
+  },
+  {
     slug: "valuation-reviewer",
     name: "Valuation Reviewer",
     vertical: "Finance & Operations",
@@ -208,6 +222,8 @@ export const AGENTS: Agent[] = [
 export const STOCK_AUTO_AGENTS = [
   "earnings-reviewer",
   "market-researcher",
+  "valuation-reviewer",
+  "news-analyst",
   "intel-hub",
 ] as const;
 

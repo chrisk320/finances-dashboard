@@ -1,22 +1,7 @@
 "use client";
 
 import type { Verdict } from "@/lib/types";
-
-const RATING_STYLE: Record<
-  Verdict["rating"],
-  { bg: string; border: string; text: string }
-> = {
-  "STRONG BUY": { bg: "#0e2b1a", border: "#4ade80", text: "#4ade80" },
-  BUY: { bg: "#0e2b1a", border: "#34d399", text: "#34d399" },
-  HOLD: { bg: "#221a05", border: "#fbbf24", text: "#fbbf24" },
-  AVOID: { bg: "#2a0d0d", border: "#f87171", text: "#f87171" },
-};
-
-const CONFIDENCE_COLOR: Record<Verdict["confidence"], string> = {
-  HIGH: "#4ade80",
-  MEDIUM: "#fbbf24",
-  LOW: "#f87171",
-};
+import { CONFIDENCE_COLOR, RATING_STYLE } from "@/lib/verdictStyle";
 
 export default function VerdictCard({ verdict }: { verdict: Verdict }) {
   const style = RATING_STYLE[verdict.rating];

@@ -10,7 +10,13 @@ const DOT_COLOR: Record<AgentStatus, string> = {
   error: "#f87171",
 };
 
-const AUTO_STOCK = ["earnings-reviewer", "market-researcher", "intel-hub"];
+const AUTO_STOCK = [
+  "earnings-reviewer",
+  "market-researcher",
+  "valuation-reviewer",
+  "news-analyst",
+  "intel-hub",
+];
 const AUTO_CRYPTO = ["coingecko-agent", "intel-hub"];
 
 export default function AgentStatusList({

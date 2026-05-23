@@ -1,12 +1,16 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AgentFindingCard from "./AgentFindingCard";
+import NewsEventsPanel from "./NewsEventsPanel";
+import PositionPanel from "./PositionPanel";
 import Sparkline from "./Sparkline";
+import ValuationPanel from "./ValuationPanel";
 import VerdictCard from "./VerdictCard";
 import { AGENTS } from "@/lib/agents";
 import { cacheTtlMs } from "@/lib/orchestrator";
 import { fmtPrice, pct, pctColor, timeUntil } from "@/lib/format";
+import { isWatched, markSeen, toggleWatch } from "@/lib/watchlist";
 import type {
   AgentFinding,
   AssetMode,
@@ -28,9 +32,15 @@ type Props = {
 const AUTO_STOCK = new Set([
   "earnings-reviewer",
   "market-researcher",
+  "valuation-reviewer",
+  "news-analyst",
   "intel-hub",
 ]);
 const AUTO_CRYPTO = new Set(["coingecko-agent", "intel-hub"]);
+
+// Agents whose findings live in a dedicated panel rather than the agent grid.
+// intel-hub already powers the top VerdictCard; news-analyst feeds NewsEventsPanel.
+const NON_GRID_AGENTS = new Set(["intel-hub", "news-analyst"]);
 
 export default function ResultPage({
   mode,
@@ -43,6 +53,8 @@ export default function ResultPage({
   onRunAgent,
 }: Props) {
   const findings: AgentFinding[] = useMemo(() => {
+    const dropNonGrid = (list: AgentFinding[]) =>
+      list.filter((f) => !NON_GRID_AGENTS.has(f.agentSlug));
     if (loading) {
       const seen = new Set<string>();
       const merged: AgentFinding[] = [];
@@ -51,9 +63,9 @@ export default function ResultPage({
         seen.add(f.agentSlug);
         merged.push(f);
       }
-      return merged;
+      return dropNonGrid(merged);
     }
-    return result?.findings ?? liveFindings;
+    return dropNonGrid(result?.findings ?? liveFindings);
   }, [loading, liveFindings, result]);
 
   const verdict = result?.verdict ?? null;
@@ -79,6 +91,26 @@ export default function ResultPage({
   const cachedAt = result?.cachedAt;
   const refreshesIn = cachedAt ? timeUntil(cachedAt + cacheTtlMs) : null;
 
+  const [watched, setWatched] = useState(false);
+  useEffect(() => {
+    setWatched(isWatched(symbol, mode));
+  }, [symbol, mode]);
+
+  // Once a verdict is rendered, mark the row as seen so the watchlist delta
+  // badge clears on view.
+  useEffect(() => {
+    if (verdict) {
+      markSeen(symbol, mode);
+      window.dispatchEvent(new Event("watchlist:change"));
+    }
+  }, [verdict, symbol, mode]);
+
+  function onToggleStar() {
+    const next = toggleWatch(symbol, mode);
+    setWatched(next);
+    window.dispatchEvent(new Event("watchlist:change"));
+  }
+
   return (
     <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-5">
       <header className="flex flex-wrap items-end justify-between gap-4">
@@ -87,6 +119,15 @@ export default function ResultPage({
             <h1 className="text-[28px] font-mono font-bold tracking-wide text-text-primary">
               {symbol}
             </h1>
+            <button
+              onClick={onToggleStar}
+              aria-label={watched ? "Remove from watchlist" : "Add to watchlist"}
+              title={watched ? "Remove from watchlist" : "Add to watchlist"}
+              className="text-[18px] leading-none transition-colors"
+              style={{ color: watched ? "#fbbf24" : "#4a5170" }}
+            >
+              {watched ? "★" : "☆"}
+            </button>
             <span className="text-[11px] uppercase tracking-[0.14em] font-mono text-text-muted">
               {isCrypto ? "Crypto" : "Equity"}
             </span>
@@ -142,6 +183,10 @@ export default function ResultPage({
         </div>
       )}
 
+      {!isCrypto && (
+        <PositionPanel symbol={symbol} currentPrice={price} />
+      )}
+
       {verdict && <VerdictCard verdict={verdict} />}
 
       {loading && !verdict && (
@@ -153,6 +198,15 @@ export default function ResultPage({
             Synthesizing verdict from agent findings…
           </div>
         </div>
+      )}
+
+      <ValuationPanel mode={mode} metrics={result?.metrics} />
+
+      {!isCrypto && (
+        <NewsEventsPanel
+          events={(result as StockResearchResult | null)?.newsEvents}
+          sectorEtf={(result as StockResearchResult | null)?.sectorEtf ?? null}
+        />
       )}
 
       <section>

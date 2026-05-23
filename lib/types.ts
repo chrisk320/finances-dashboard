@@ -15,12 +15,17 @@ export type AgentSlug =
   | "statement-auditor"
   | "meeting-prep-agent";
 
+export type AgentSignal = "BULLISH" | "NEUTRAL" | "BEARISH";
+
 export type AgentFinding = {
   agentSlug: AgentSlug | string;
   agentName: string;
   accentColor: string;
   status: AgentStatus;
   summary: string;
+  headline?: string;
+  signal?: AgentSignal;
+  bullets?: string[];
   raw?: any;
   error?: string;
 };
@@ -37,11 +42,46 @@ export type Quote = {
   changePct: number;
 };
 
+export type ValuationMetrics = {
+  peTTM?: number | null;
+  evEbitdaTTM?: number | null;
+  psTTM?: number | null;
+  fcfMarginTTM?: number | null; // FCF / revenue, %
+  roeTTM?: number | null; // %
+  debtEquityAnnual?: number | null;
+  dividendYieldTTM?: number | null; // %
+  week52High?: number | null;
+  week52Low?: number | null;
+};
+
+export type CryptoMetrics = {
+  marketCap?: number | null;
+  fullyDilutedValuation?: number | null;
+  fdvOverMc?: number | null; // dilution overhang ratio
+  totalVolume24h?: number | null;
+  volumeOverMc?: number | null; // turnover
+};
+
+export type NewsImpact = "positive" | "neutral" | "negative";
+
+export type NewsEvent = {
+  title: string;
+  source: string;
+  url?: string;
+  publishedAt?: number;
+  scope: "company" | "sector";
+  impact: NewsImpact;
+  rationale: string;
+};
+
 export type StockResearchResult = {
   ticker: string;
   quote: Quote;
   verdict: Verdict;
   findings: AgentFinding[];
+  metrics?: ValuationMetrics;
+  newsEvents?: NewsEvent[];
+  sectorEtf?: string | null;
   cachedAt?: number;
 };
 
@@ -57,6 +97,7 @@ export type CryptoResearchResult = {
   priceData: CryptoPriceData;
   verdict: Verdict;
   findings: AgentFinding[];
+  metrics?: CryptoMetrics;
   cachedAt?: number;
 };
 
@@ -84,3 +125,25 @@ export type Agent = {
 export type RunStatus = Record<string, AgentStatus>;
 
 export type AssetMode = "stocks" | "crypto";
+
+export type PortfolioHolding = {
+  ticker: string;
+  shares: number;
+  /** Per-share cost basis in USD (what brokers display). */
+  costBasis: number;
+  addedAt: number;
+  notes?: string;
+};
+
+export type WatchlistItem = {
+  symbol: string;
+  mode: AssetMode;
+  addedAt: number;
+  lastChecked?: number;
+  lastVerdict?: Verdict;
+  /**
+   * Rating the user last saw in-app for this symbol. When this differs from
+   * `lastVerdict.rating`, the watchlist row shows a "changed" delta badge.
+   */
+  lastSeenRating?: Verdict["rating"];
+};

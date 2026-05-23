@@ -1,7 +1,7 @@
 "use client";
 
 import { getAgent } from "@/lib/agents";
-import type { AgentFinding } from "@/lib/types";
+import type { AgentFinding, AgentSignal } from "@/lib/types";
 
 const STATUS_LABEL: Record<AgentFinding["status"], string> = {
   running: "Running…",
@@ -10,9 +10,32 @@ const STATUS_LABEL: Record<AgentFinding["status"], string> = {
   error: "Error",
 };
 
+const SIGNAL_COLOR: Record<AgentSignal, string> = {
+  BULLISH: "#4ade80",
+  NEUTRAL: "#fbbf24",
+  BEARISH: "#f87171",
+};
+
+function statusStyle(status: AgentFinding["status"]) {
+  switch (status) {
+    case "done":
+      return { bg: "#0e2b1a", fg: "#4ade80" };
+    case "running":
+      return { bg: "#221a05", fg: "#fbbf24" };
+    case "error":
+      return { bg: "#2a0d0d", fg: "#f87171" };
+    default:
+      return { bg: "#1a1d2e", fg: "#8b9ab8" };
+  }
+}
+
 export default function AgentFindingCard({ finding }: { finding: AgentFinding }) {
   const agent = getAgent(finding.agentSlug);
   const accent = finding.accentColor;
+  const status = statusStyle(finding.status);
+  const structured =
+    finding.status === "done" &&
+    (finding.headline || (finding.bullets && finding.bullets.length > 0));
 
   return (
     <div
@@ -41,33 +64,59 @@ export default function AgentFindingCard({ finding }: { finding: AgentFinding })
             {agent?.vertical ?? "Agent"}
           </div>
         </div>
+        {finding.signal && (
+          <span
+            className="text-[9px] uppercase tracking-[0.12em] font-mono px-2 py-0.5 rounded-full"
+            style={{
+              background: `${SIGNAL_COLOR[finding.signal]}1a`,
+              color: SIGNAL_COLOR[finding.signal],
+              border: `1px solid ${SIGNAL_COLOR[finding.signal]}55`,
+            }}
+          >
+            {finding.signal}
+          </span>
+        )}
         <span
           className="text-[9px] uppercase tracking-[0.12em] font-mono px-2 py-0.5 rounded-full"
-          style={{
-            background:
-              finding.status === "done"
-                ? "#0e2b1a"
-                : finding.status === "running"
-                ? "#221a05"
-                : finding.status === "error"
-                ? "#2a0d0d"
-                : "#1a1d2e",
-            color:
-              finding.status === "done"
-                ? "#4ade80"
-                : finding.status === "running"
-                ? "#fbbf24"
-                : finding.status === "error"
-                ? "#f87171"
-                : "#8b9ab8",
-          }}
+          style={{ background: status.bg, color: status.fg }}
         >
           {STATUS_LABEL[finding.status]}
         </span>
       </div>
-      <p className="text-[12.5px] leading-relaxed text-text-primary whitespace-pre-wrap">
-        {finding.status === "running" ? "Gathering data…" : finding.summary}
-      </p>
+
+      {finding.status === "running" ? (
+        <p className="text-[12.5px] leading-relaxed text-text-secondary">
+          Gathering data…
+        </p>
+      ) : structured ? (
+        <div className="flex flex-col gap-2.5">
+          {finding.headline && (
+            <p className="text-[13.5px] font-semibold leading-snug text-text-primary">
+              {finding.headline}
+            </p>
+          )}
+          {finding.bullets && finding.bullets.length > 0 && (
+            <ul className="flex flex-col gap-1.5">
+              {finding.bullets.map((b, i) => (
+                <li
+                  key={i}
+                  className="text-[12px] leading-relaxed text-text-secondary flex gap-2"
+                >
+                  <span
+                    style={{ color: accent }}
+                    className="mt-[5px] w-1 h-1 rounded-full shrink-0"
+                  />
+                  <span>{b}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
+        <p className="text-[12.5px] leading-relaxed text-text-primary whitespace-pre-wrap">
+          {finding.summary}
+        </p>
+      )}
     </div>
   );
 }

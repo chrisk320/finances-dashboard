@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import AgentStatusList from "./AgentStatusList";
+import WatchlistSection from "./WatchlistSection";
 import type { AssetMode, RunStatus } from "@/lib/types";
 
 export type Recent = {
@@ -42,11 +43,13 @@ export default function SearchSidebar({
   mode,
   status,
   current,
+  refreshingSymbol,
   onSearch,
 }: {
   mode: AssetMode;
   status: RunStatus;
   current: string | null;
+  refreshingSymbol?: string | null;
   onSearch: (symbol: string) => void;
 }) {
   const [input, setInput] = useState("");
@@ -97,6 +100,13 @@ export default function SearchSidebar({
           Run research
         </button>
       </form>
+
+      <WatchlistSection
+        mode={mode}
+        current={current}
+        refreshingSymbol={refreshingSymbol ?? null}
+        onOpen={onSearch}
+      />
 
       {filteredRecents.length > 0 && (
         <div>
