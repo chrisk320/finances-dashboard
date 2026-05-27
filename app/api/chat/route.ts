@@ -1,4 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { clientKeyFromHeaders, consume } from "@/lib/rateLimit";
+
+const RATE_LIMIT_MAX = 20;
+const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
 let client: Anthropic | null = null;
 
@@ -13,6 +17,25 @@ function getClient(): Anthropic {
 
 export async function POST(req: Request) {
   try {
+    if (process.env.NODE_ENV === "production") {
+      const key = clientKeyFromHeaders(req.headers);
+      const limit = consume(key, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
+      if (!limit.ok) {
+        return Response.json(
+          {
+            error: "Too many requests. Please wait before searching again.",
+            retryAfterMs: limit.retryAfterMs,
+          },
+          {
+            status: 429,
+            headers: {
+              "Retry-After": String(Math.ceil(limit.retryAfterMs / 1000)),
+            },
+          },
+        );
+      }
+    }
+
     const body = await req.json();
     const {
       system,

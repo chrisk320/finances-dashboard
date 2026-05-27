@@ -1,12 +1,101 @@
 # Financial Research Engine
 
-A search-driven research engine for a long-term, buy-and-hold equity investor. Type a ticker (`NVDA`) or crypto symbol (`SOL`) and specialized agents fan out in parallel — pulling earnings, news, prediction-market signals, and crypto data — then the **Intelligence Hub** synthesizes everything into a single `STRONG BUY / BUY / HOLD / AVOID` verdict with a 3-4 sentence thesis.
+> Type a ticker. Four AI agents fan out in parallel. Get a long-term buy/hold verdict in under 10 seconds.
 
-It is not a dashboard of agents. It is a search engine where agents are the backend workers.
+[Live demo](https://finances-dashboard-theta.vercel.app) · [Screenshots](#screenshots) · [Architecture](#architecture) · [Tech decisions](#tech-decisions-the-why)
+
+![hero — NVDA result page](docs/screenshots/02-stock-verdict.png)
 
 ---
 
-## Quick start
+## What it does
+
+A search-driven research engine for a **long-term, buy-and-hold equity investor**. You type a stock ticker (`NVDA`) or crypto symbol (`BTC`) and four specialized agents fire in parallel against live Finnhub, CoinGecko, and Anthropic Claude. The **Intelligence Hub** then synthesizes their outputs into a single `STRONG BUY / BUY / HOLD / AVOID` verdict with a confidence band and a 3–4 sentence thesis.
+
+Beyond the core search loop the app also ships:
+
+- **Valuation panel** — P/E, EV/EBITDA, FCF margin, ROE, D/E, etc. with color-coded benchmark bands and `?` glossary tooltips
+- **News Analyst** — recent company + sector headlines tagged Helps / Mixed / Hurts the long-term thesis
+- **Watchlist** — star a ticker, 5-minute background poller flags verdict changes
+- **Portfolio** — enter holdings (or paste a CSV) and get **cost-basis-aware** verdicts (the orchestrator bypasses cache for held tickers and feeds your average cost into the Hub prompt)
+
+---
+
+## Screenshots
+
+| | |
+|---|---|
+| ![search](docs/screenshots/01-search.png) <br/> *Empty search · sidebar + nav* | ![crypto](docs/screenshots/03-crypto.png) <br/> *Crypto verdict with sparkline* |
+| ![portfolio](docs/screenshots/04-portfolio.png) <br/> *Portfolio · cost-basis-aware verdicts* | ![tooltip](docs/screenshots/07-tooltip.png) <br/> *Glossary tooltip on P/E TTM* |
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    User([User types ticker])
+    UI[Next.js App Router]
+    Cache{4h localStorage<br/>cache hit?}
+    Orch[lib/orchestrator.ts<br/>Promise.all fan-out]
+    Earn[Earnings Reviewer]
+    Mkt[Market Researcher]
+    Val[Valuation Reviewer]
+    News[News Analyst]
+    Hub[Intelligence Hub<br/>synthesizes verdict]
+    Verdict[Verdict + Findings]
+
+    User --> UI
+    UI --> Cache
+    Cache -- yes --> Verdict
+    Cache -- no --> Orch
+    Orch --> Earn
+    Orch --> Mkt
+    Orch --> Val
+    Orch --> News
+    Earn --> Hub
+    Mkt --> Hub
+    Val --> Hub
+    News --> Hub
+    Hub --> Verdict
+
+    Earn -.->|/api/chat + /api/finnhub| EXT[(Anthropic Claude<br/>+ Finnhub + CoinGecko)]
+    Mkt -.-> EXT
+    Val -.-> EXT
+    News -.-> EXT
+    Hub -.-> EXT
+```
+
+**Request flow** — browser hits Next.js Route Handlers (`/api/chat`, `/api/finnhub`, `/api/coingecko`, `/api/pmi`); secrets stay server-side. The orchestrator fans out four agent runners via `Promise.all`, waits for all four, then calls the Hub with a structured context block.
+
+**Two-layer cache** — `next: { revalidate: 3600 }` on the raw API proxies (1h) plus a 4h `localStorage` cache on the synthesized verdict. Held tickers bypass the verdict cache so the Hub sees your live cost basis.
+
+**Cross-tab sync** — `lib/watchlist.ts` and `lib/portfolio.ts` dispatch custom events (`watchlist:change` / `portfolio:change`) on every write so a star toggled in one tab updates the other. A 5-minute watchlist poller pauses on `document.visibilityState` to avoid burning quota in background tabs.
+
+**Cost protection** — `lib/rateLimit.ts` applies an in-memory sliding-window limit (20 req / IP / hour) to `/api/chat` only. Defends the Anthropic key on a public URL until Phase B introduces per-account quotas tied to Google sign-in.
+
+---
+
+## Tech decisions (the why)
+
+- **Promise.all fan-out beats sequential.** Four agent calls run in ~3s parallel vs ~12s sequential. The Hub waits for all of them, so total latency = max(agent) + Hub round-trip.
+- **Two TTLs, not one.** Raw market data (`/quote`, `/company-news`) churns hourly; synthesized verdicts hold up for 4 hours. Mixing them into one TTL wastes Anthropic calls or serves stale prices — separating them gets you the cheap freshness *and* the cheap reuse.
+- **Cost-basis-aware verdicts.** When `getHolding(ticker)` returns a position, the orchestrator skips the bare-ticker cache key and injects an explicit "user holds N shares at $X avg" block into the Hub prompt. A "BUY" recommendation reads very differently when you're already 40% up — the model needs to know.
+- **Structured agent output.** Each runner appends `STRUCTURED_FORMAT` to its system prompt and the result flows through `parseAgentResponse` which tolerates Claude phrasing drift. UI cards render headline + signal pill + bullets when parsing succeeds, falling back to raw text when it doesn't.
+- **Client-side persistence for v1.** Watchlist + portfolio live in `localStorage` today — zero infra, fastest path to a live demo. Phase B (in progress) migrates them to Postgres behind Google sign-in; the module shapes are designed for a drop-in swap.
+- **In-memory rate limit on `/api/chat`.** Accepts that Vercel cold starts reset the counter; that's a fine trade-off for hobby traffic. Phase B replaces this with per-account quotas — the rate limiter goes away when sign-in lands.
+
+---
+
+## Tech stack
+
+**Next.js 14** (App Router) · **TypeScript** strict · **Tailwind CSS** · **Anthropic Claude** (Sonnet 4) · **Finnhub** · **CoinGecko** · **Vercel**
+
+No external state library. No tooltip / popover library. No Redux, no Zustand. Just `useState` / `useEffect`, `localStorage`, and a couple of `CustomEvent`s.
+
+---
+
+## Local development
 
 ```bash
 npm install
@@ -16,144 +105,70 @@ npm run dev                        # http://localhost:3000
 
 ### Required env vars
 
-| Key | Where it's used | How to get it |
+| Key | Used by | How to get it |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | All Claude calls (agent runners, Intelligence Hub) | console.anthropic.com |
-| `PMI_JWT` | Heisenberg prediction-market queries | narrative.agent.heisenberg.so → DevTools → Network → `Authorization` header. **Expires periodically — paste a fresh one when calls 401.** |
-| `NEXT_PUBLIC_FINNHUB_KEY` | Stock quotes, company news, earnings calendar | finnhub.io/dashboard |
+| `NEXT_PUBLIC_FINNHUB_KEY` | Stock quotes, company news, earnings, fundamentals | finnhub.io/dashboard |
+| `PMI_JWT` | Heisenberg prediction-market queries (idle / manual only) | narrative.agent.heisenberg.so → DevTools → Network → `Authorization` header. **Expires periodically — paste a fresh one when calls 401.** Optional in the default auto-run flow. |
 
 `.env.local` is gitignored. Never put real keys in `.env.local.example`.
 
----
-
-## How a search works
-
-```
-User types "NVDA"
-  → 3 agents fire in parallel via lib/orchestrator.ts
-      ✓ Earnings Reviewer    — Finnhub company news + Claude synthesis
-      ✓ Market Researcher    — recent headlines + sector read
-      ✓ Prediction Markets   — Heisenberg PMI agent 575 (spiking markets)
-  → Intelligence Hub waits for all three, then produces the verdict
-  → Result page renders:
-      - Live price + today's change (Finnhub /quote)
-      - Verdict card (rating + confidence + thesis)
-      - One card per agent that ran
-      - Idle agents shown as "+ Run" buttons
-```
-
-Same flow for crypto (`SOL`), except the per-asset agent is **Crypto Intelligence** reading the seeded CoinGecko snapshot.
-
-Every agent system prompt is suffixed with the long-term investor profile:
-
-> You are analyzing this for a long-term, buy-and-hold investor with a 3-10 year horizon. Filter out short-term noise. Focus on what affects the multi-year thesis. Be direct.
-
----
-
-## Project structure
+### Project layout
 
 ```
 app/
 ├── layout.tsx
 ├── page.tsx                    # Renders <ResearchEngine />
 └── api/
-    ├── chat/route.ts           # Anthropic proxy (lazy SDK init)
-    ├── finnhub/route.ts        # Finnhub proxy w/ revalidate: 3600
+    ├── chat/route.ts           # Anthropic proxy + IP rate limit
+    ├── finnhub/route.ts        # Finnhub proxy (revalidate: 3600, no-store on /quote)
+    ├── coingecko/route.ts      # CoinGecko proxy (revalidate: 3600)
     └── pmi/route.ts            # Heisenberg PMI proxy (no cache)
 
 lib/
-├── orchestrator.ts             # runStockResearch / runCryptoResearch + 4h localStorage cache
-├── agents.ts                   # AGENTS[] + tier color map
-├── cryptoData.ts               # Seeded CoinGecko snapshot
-├── format.ts                   # fmt / fmtPrice / pct helpers
+├── orchestrator.ts             # runStockResearch / runCryptoResearch · Promise.all fan-out · 4h localStorage cache
+├── agents.ts                   # AGENTS[] + AUTO_AGENT slug sets
+├── rateLimit.ts                # In-memory sliding-window limiter
+├── watchlist.ts                # localStorage CRUD + verdict-change detection
+├── portfolio.ts                # localStorage CRUD + CSV parser + cost-basis lookup
+├── metricsGlossary.ts          # 12 metric definitions + benchmark bands
+├── verdictStyle.ts             # Rating palette + direction helper
 └── types.ts
 
 components/
-├── ResearchEngine.tsx          # Root: nav + sidebar + result
-├── SearchSidebar.tsx           # Search box + recents + live agent status
-├── ResultPage.tsx              # Verdict + finding cards + idle "+ Run" buttons
+├── ResearchEngine.tsx          # Root: nav + sidebar + result + watchlist poller
+├── SearchSidebar.tsx
+├── ResultPage.tsx              # Verdict + valuation + news + agent findings
 ├── VerdictCard.tsx
+├── ValuationPanel.tsx          # P/E etc. tiles with color-coded bands
+├── MetricTooltip.tsx           # `?` button + popover
+├── NewsEventsPanel.tsx         # Helps / Mixed / Hurts tags grouped by scope
+├── PortfolioView.tsx           # Manual entry + CSV paste + holdings table
+├── PositionPanel.tsx           # Cost-basis P/L on result page when held
+├── WatchlistSection.tsx
 ├── AgentFindingCard.tsx
 ├── AgentStatusList.tsx
-├── AgentsGrid.tsx              # The original agent grid (Agents tab)
-├── Sparkline.tsx
-└── panels/                     # Migrated prototype panels — Agents-tab only
-    ├── StandardPanel.tsx
-    ├── CryptoPanel.tsx
-    ├── PredMktPanel.tsx
-    └── IntelHubPanel.tsx
-
-financial-agents-dashboard.jsx  # Original 1,450-line prototype (kept for reference, excluded from tsconfig)
-CLAUDE.md                       # Full design spec
+└── ...
 ```
 
-**Rule:** all client fetches go through `/api/*`. Never call `api.anthropic.com`, `finnhub.io`, or `narrative.agent.heisenberg.so` directly from a component.
+### Common tasks
+
+| | |
+|---|---|
+| Add an agent that runs automatically | Add it to `AGENTS` in `lib/agents.ts`, add slug to `STOCK_AUTO_AGENTS`, add a runner in `lib/orchestrator.ts`, fold it into the `Promise.all` |
+| Add a manual-only agent | Add to `AGENTS` only — it appears as a `+ Run` button on the result page |
+| Refresh a stale verdict | Click `↺ Refresh` on the result page (clears the cache key for that ticker) |
+| Rotate the PMI JWT | Paste a fresh value in `.env.local` and restart `npm run dev` |
 
 ---
 
-## Tabs
+## What's next
 
-- **Stocks** (default) — search a ticker, get a research verdict.
-- **Crypto** — same flow, scoped to crypto.
-- **Agents** — the original prototype grid; clicking an agent opens its detail panel. Useful for browsing what each agent can do or chatting with one directly. Not the primary surface.
-
----
-
-## Caching
-
-Two layers, zero infrastructure:
-
-| Layer | What | TTL | Where |
-|---|---|---|---|
-| `next: { revalidate }` | Finnhub raw responses | 1h | `app/api/finnhub/route.ts` |
-| `localStorage` | Full Claude synthesis result (verdict + findings) | 4h | `lib/orchestrator.ts` (`getCached` / `setCache`) |
-| no cache | PMI feed | — | `cache: "no-store"` in `app/api/pmi/route.ts` |
-
-The result page shows `cached · refreshes in Xh` and a manual `↺ Refresh` button (clears the cache key and re-runs).
-
-When you outgrow `localStorage`, swap it for Upstash Redis — same shape, same call sites; see [CLAUDE.md](CLAUDE.md#future-upstash-redis-when-ready-to-upgrade).
-
----
-
-## Tech
-
-- **Next.js 14** App Router
-- **TypeScript** strict
-- **Tailwind CSS** + a few inline styles for agent accent colors
-- **DM Mono** + **DM Sans** (Google Fonts)
-- **`@anthropic-ai/sdk`** server-side via `app/api/chat`
-- No external state library — just `useState` / `useEffect`
-
----
-
-## Common tasks
-
-**Add a new agent that runs automatically on stock search**
-1. Add it to `AGENTS` in `lib/agents.ts` and to `STOCK_AUTO_AGENTS`.
-2. Add a runner function in `lib/orchestrator.ts` following the `runEarningsReviewer` pattern.
-3. Add it to the `Promise.all` in `runStockResearch`.
-
-**Add a new agent that's manually triggered only**
-1. Add it to `AGENTS` in `lib/agents.ts` (do not add to the auto list).
-2. It will appear as a `+ Run` button on the result page automatically. `runAgentManually` handles the generic case via Claude; add a custom branch in the switch if it needs special data fetching.
-
-**Refresh stale verdicts**
-Click `↺ Refresh` on the result page, or run `localStorage.clear()` in DevTools.
-
-**Rotate the PMI JWT**
-Paste a new value in `.env.local` and restart `npm run dev`.
-
----
-
-## Roadmap
-
-1. Recent searches with colored dot per asset class (done — localStorage)
-2. Watchlist persistence + re-run research on demand
-3. Background signal feed (cron `runStockResearch` over watchlist every 30min)
-4. CoinGecko live (replace seeded snapshot with cached Route Handler, `revalidate: 60`)
-5. Settings page to paste a fresh PMI JWT without editing `.env.local`
-6. Model Builder wired to Finnhub financials for real DCF inputs
-7. Portfolio view — enter holdings, get portfolio-level daily briefing
-8. Upstash Redis cache + per-agent run counters
+- **Phase B (in progress)** — Google sign-in via NextAuth + Postgres backing watchlist/portfolio; per-user data persists across devices; search/verdict stays public so the demo is frictionless
+- **Tests + CI** — Vitest unit on `parseAgentResponse` / `parseNewsEventsResponse` / verdict regex / cache helpers, Playwright e2e on search → verdict, GitHub Actions for typecheck/lint/test/build on every push
+- **Server-side cron** — Vercel Cron re-runs research on watchlist tickers daily, surfaces verdict changes via email digest
+- **Streaming Claude responses** — SSE on `/api/chat` so finding cards materialize token-by-token
+- **Sentry + structured logging**
+- **Schwab OAuth** — replace manual portfolio entry with real brokerage sync
 
 See [CLAUDE.md](CLAUDE.md) for the full design spec.
