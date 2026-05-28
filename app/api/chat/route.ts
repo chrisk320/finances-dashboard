@@ -1,8 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { auth } from "@/lib/auth";
 import { clientKeyFromHeaders, consume } from "@/lib/rateLimit";
 
-const RATE_LIMIT_MAX = 20;
-const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const ANON_MAX = 20;
+const ANON_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const USER_MAX = 200;
+const USER_WINDOW_MS = 24 * 60 * 60 * 1000; // 1 day
 
 let client: Anthropic | null = null;
 
@@ -18,8 +21,19 @@ function getClient(): Anthropic {
 export async function POST(req: Request) {
   try {
     if (process.env.NODE_ENV === "production") {
-      const key = clientKeyFromHeaders(req.headers);
-      const limit = consume(key, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
+      const session = await auth();
+      const { key, max, windowMs } = session?.user?.id
+        ? {
+            key: `user:${session.user.id}`,
+            max: USER_MAX,
+            windowMs: USER_WINDOW_MS,
+          }
+        : {
+            key: `ip:${clientKeyFromHeaders(req.headers)}`,
+            max: ANON_MAX,
+            windowMs: ANON_WINDOW_MS,
+          };
+      const limit = consume(key, max, windowMs);
       if (!limit.ok) {
         return Response.json(
           {

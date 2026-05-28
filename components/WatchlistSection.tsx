@@ -24,11 +24,17 @@ export default function WatchlistSection({
   const [items, setItems] = useState<WatchlistItem[]>([]);
 
   useEffect(() => {
-    setItems(loadWatchlist());
-    const sync = () => setItems(loadWatchlist());
+    let cancelled = false;
+    const sync = () => {
+      void loadWatchlist().then((next) => {
+        if (!cancelled) setItems(next);
+      });
+    };
+    sync();
     window.addEventListener("storage", sync);
     window.addEventListener("watchlist:change", sync);
     return () => {
+      cancelled = true;
       window.removeEventListener("storage", sync);
       window.removeEventListener("watchlist:change", sync);
     };
@@ -58,8 +64,9 @@ export default function WatchlistSection({
             <button
               key={`${item.mode}:${item.symbol}`}
               onClick={() => {
-                markSeen(item.symbol, item.mode);
-                window.dispatchEvent(new Event("watchlist:change"));
+                void markSeen(item.symbol, item.mode).then(() => {
+                  window.dispatchEvent(new Event("watchlist:change"));
+                });
                 onOpen(item.symbol);
               }}
               className={`flex items-center gap-2 text-left px-2 py-1.5 text-[11px] font-mono rounded-md transition-colors ${

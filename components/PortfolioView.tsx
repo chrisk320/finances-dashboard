@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import AuthGate from "./AuthGate";
 import { fmtPrice, pct, pctColor } from "@/lib/format";
 import { getCached } from "@/lib/orchestrator";
 import {
@@ -15,6 +16,7 @@ import type {
   PortfolioHolding,
   StockResearchResult,
   Verdict,
+  WatchlistItem,
 } from "@/lib/types";
 
 type Quotes = Record<string, number | null>;
@@ -32,13 +34,21 @@ async function fetchQuote(ticker: string): Promise<number | null> {
   }
 }
 
-function findVerdict(ticker: string): Verdict | undefined {
-  const watched = loadWatchlist().find(
-    (w) => w.symbol === ticker && w.mode === "stocks"
-  );
-  if (watched?.lastVerdict) return watched.lastVerdict;
-  const cached = getCached<StockResearchResult>(ticker);
-  return cached?.verdict;
+function buildVerdictLookup(
+  watchlist: WatchlistItem[]
+): (ticker: string) => Verdict | undefined {
+  const byTicker = new Map<string, Verdict>();
+  for (const w of watchlist) {
+    if (w.mode === "stocks" && w.lastVerdict) {
+      byTicker.set(w.symbol, w.lastVerdict);
+    }
+  }
+  return (ticker: string) => {
+    const watched = byTicker.get(ticker);
+    if (watched) return watched;
+    const cached = getCached<StockResearchResult>(ticker);
+    return cached?.verdict;
+  };
 }
 
 export default function PortfolioView({
@@ -46,7 +56,23 @@ export default function PortfolioView({
 }: {
   onOpenTicker: (ticker: string) => void;
 }) {
+  return (
+    <AuthGate
+      title="Sign in to track your portfolio"
+      description="Your holdings persist across devices once you sign in. Verdicts use your actual cost basis to frame each rating as a hold / add / trim call."
+    >
+      <PortfolioViewBody onOpenTicker={onOpenTicker} />
+    </AuthGate>
+  );
+}
+
+function PortfolioViewBody({
+  onOpenTicker,
+}: {
+  onOpenTicker: (ticker: string) => void;
+}) {
   const [holdings, setHoldings] = useState<PortfolioHolding[]>([]);
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [quotes, setQuotes] = useState<Quotes>({});
   const [refreshing, setRefreshing] = useState(false);
   const [csvOpen, setCsvOpen] = useState(false);
@@ -57,6 +83,8 @@ export default function PortfolioView({
   const [shares, setShares] = useState("");
   const [costBasis, setCostBasis] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+
+  const findVerdict = useMemo(() => buildVerdictLookup(watchlist), [watchlist]);
 
   const refreshQuotes = useCallback(async (items: PortfolioHolding[]) => {
     if (items.length === 0) {
@@ -71,22 +99,32 @@ export default function PortfolioView({
     setRefreshing(false);
   }, []);
 
+  const reload = useCallback(async () => {
+    const [items, wl] = await Promise.all([loadPortfolio(), loadWatchlist()]);
+    setHoldings(items);
+    setWatchlist(wl);
+    return items;
+  }, []);
+
   // Load + sync portfolio
   useEffect(() => {
-    const items = loadPortfolio();
-    setHoldings(items);
-    void refreshQuotes(items);
+    let cancelled = false;
+    void reload().then((items) => {
+      if (!cancelled) void refreshQuotes(items);
+    });
     const sync = () => {
-      const next = loadPortfolio();
-      setHoldings(next);
+      void reload();
     };
     window.addEventListener("storage", sync);
     window.addEventListener("portfolio:change", sync);
+    window.addEventListener("watchlist:change", sync);
     return () => {
+      cancelled = true;
       window.removeEventListener("storage", sync);
       window.removeEventListener("portfolio:change", sync);
+      window.removeEventListener("watchlist:change", sync);
     };
-  }, [refreshQuotes]);
+  }, [reload, refreshQuotes]);
 
   const totals = useMemo(() => {
     let cost = 0;
@@ -105,7 +143,7 @@ export default function PortfolioView({
     return { cost, value, pnl, pnlPct, valued, total: holdings.length };
   }, [holdings, quotes]);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
     const t = ticker.trim().toUpperCase();
@@ -116,43 +154,40 @@ export default function PortfolioView({
       return setFormError("Shares must be a positive number.");
     if (!Number.isFinite(cb) || cb <= 0)
       return setFormError("Cost basis must be a positive number.");
-    addHolding({ ticker: t, shares: sh, costBasis: cb });
+    await addHolding({ ticker: t, shares: sh, costBasis: cb });
     window.dispatchEvent(new Event("portfolio:change"));
     window.dispatchEvent(new Event("watchlist:change"));
     setTicker("");
     setShares("");
     setCostBasis("");
-    const next = loadPortfolio();
-    setHoldings(next);
+    const next = await reload();
     void refreshQuotes(next);
   }
 
-  function handleRemove(t: string) {
-    removeHolding(t);
+  async function handleRemove(t: string) {
+    await removeHolding(t);
     window.dispatchEvent(new Event("portfolio:change"));
-    const next = loadPortfolio();
-    setHoldings(next);
+    await reload();
     setQuotes((q) => {
       const { [t]: _, ...rest } = q;
       return rest;
     });
   }
 
-  function handleCsvImport() {
+  async function handleCsvImport() {
     const parsed = parseHoldingsCsv(csvText);
     if (parsed.length === 0) {
       setFormError("Couldn't parse any rows. Format: TICKER, SHARES, COST_BASIS");
       return;
     }
     for (const row of parsed) {
-      addHolding(row);
+      await addHolding(row);
     }
     window.dispatchEvent(new Event("portfolio:change"));
     window.dispatchEvent(new Event("watchlist:change"));
     setCsvText("");
     setCsvOpen(false);
-    const next = loadPortfolio();
-    setHoldings(next);
+    const next = await reload();
     void refreshQuotes(next);
   }
 
@@ -208,7 +243,7 @@ export default function PortfolioView({
         <div className="text-[10px] uppercase tracking-[0.14em] text-text-dim font-mono mb-3">
           Add holding
         </div>
-        <form onSubmit={handleSubmit} className="flex flex-wrap gap-2 items-end">
+        <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-wrap gap-2 items-end">
           <Input
             label="Ticker"
             value={ticker}
@@ -266,7 +301,7 @@ export default function PortfolioView({
             />
             <button
               type="button"
-              onClick={handleCsvImport}
+              onClick={() => void handleCsvImport()}
               className="self-start text-[11px] uppercase tracking-[0.12em] font-mono text-text-primary bg-border-subtle border border-border-subtle hover:bg-[#34384e] rounded-md px-3 py-1.5"
             >
               Add all
@@ -359,7 +394,7 @@ export default function PortfolioView({
                     ↗
                   </button>
                   <button
-                    onClick={() => handleRemove(h.ticker)}
+                    onClick={() => void handleRemove(h.ticker)}
                     title="Remove"
                     className="text-text-muted hover:text-[#f87171]"
                   >

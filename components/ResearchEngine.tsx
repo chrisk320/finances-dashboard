@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import AgentsGrid from "./AgentsGrid";
 import PortfolioView from "./PortfolioView";
 import ResultPage from "./ResultPage";
@@ -12,22 +13,26 @@ import {
   runCryptoResearch,
   runStockResearch,
 } from "@/lib/orchestrator";
+import { loadPortfolio } from "@/lib/portfolio";
 import { loadWatchlist, recordVerdict } from "@/lib/watchlist";
 import type {
   AgentFinding,
   AgentStatus,
   AssetMode,
   CryptoResearchResult,
+  PortfolioHolding,
   RunStatus,
   StockResearchResult,
 } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 const BACKGROUND_DELAY_MS = 1500;
+const MIGRATED_FLAG = "migrated:v1";
 
 type Tab = "stocks" | "crypto" | "portfolio" | "agents";
 
 export default function ResearchEngine() {
+  const { status: sessionStatus } = useSession();
   const [tab, setTab] = useState<Tab>("stocks");
   const [stockSymbol, setStockSymbol] = useState<string | null>(null);
   const [cryptoSymbol, setCryptoSymbol] = useState<string | null>(null);
@@ -78,14 +83,19 @@ export default function ResearchEngine() {
             onProgress,
           });
           setCryptoResult(res);
-          recordVerdict(symbol, mode, res.verdict);
+          void recordVerdict(symbol, mode, res.verdict);
         } else {
+          const portfolio = await loadPortfolio();
+          const holding = portfolio.find(
+            (h) => h.ticker === symbol.toUpperCase()
+          );
           const res = await runStockResearch(symbol, {
             force: opts.force,
             onProgress,
+            holding,
           });
           setStockResult(res);
-          recordVerdict(symbol, mode, res.verdict);
+          void recordVerdict(symbol, mode, res.verdict);
         }
         pushRecent(symbol, mode);
         window.dispatchEvent(new Event("watchlist:change"));
@@ -168,6 +178,41 @@ export default function ResearchEngine() {
     setError(null);
   }, [tab]);
 
+  // One-time migrator: on first sign-in, ship any pre-Phase-B localStorage
+  // data up to the per-user DB and clear it locally.
+  useEffect(() => {
+    if (sessionStatus !== "authenticated") return;
+    if (typeof window === "undefined") return;
+    if (window.localStorage.getItem(MIGRATED_FLAG) === "1") return;
+
+    const watchlistRaw = window.localStorage.getItem("watchlist:v1");
+    const portfolioRaw = window.localStorage.getItem("portfolio:v1");
+    if (!watchlistRaw && !portfolioRaw) {
+      window.localStorage.setItem(MIGRATED_FLAG, "1");
+      return;
+    }
+
+    const watchlist = safeJsonArray(watchlistRaw);
+    const portfolio = safeJsonArray(portfolioRaw);
+
+    void fetch("/api/migrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watchlist, portfolio }),
+    })
+      .then(async (res) => {
+        if (!res.ok) return;
+        window.localStorage.removeItem("watchlist:v1");
+        window.localStorage.removeItem("portfolio:v1");
+        window.localStorage.setItem(MIGRATED_FLAG, "1");
+        window.dispatchEvent(new Event("watchlist:change"));
+        window.dispatchEvent(new Event("portfolio:change"));
+      })
+      .catch(() => {
+        // Don't set the flag — retry on next mount.
+      });
+  }, [sessionStatus]);
+
   // Background watchlist poller — coarse 5-min tick, only re-runs items whose
   // last check is older than the orchestrator cache TTL (4h). Skips when the
   // tab isn't visible. Sequential with a small delay so we don't fan out
@@ -181,12 +226,18 @@ export default function ResearchEngine() {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") {
         return;
       }
-      const watchlist = loadWatchlist();
+      const watchlist = await loadWatchlist();
       const stale = watchlist.filter(
         (item) =>
           !item.lastChecked || Date.now() - item.lastChecked > cacheTtlMs
       );
       if (stale.length === 0) return;
+
+      // Cache the portfolio once per poll so each stock re-run gets the
+      // position-aware verdict path when held.
+      const portfolio = await loadPortfolio();
+      const holdingFor = (ticker: string): PortfolioHolding | undefined =>
+        portfolio.find((h) => h.ticker === ticker.toUpperCase());
 
       pollingRef.current = true;
       try {
@@ -197,8 +248,10 @@ export default function ResearchEngine() {
             const result =
               item.mode === "crypto"
                 ? await runCryptoResearch(item.symbol)
-                : await runStockResearch(item.symbol);
-            recordVerdict(item.symbol, item.mode, result.verdict);
+                : await runStockResearch(item.symbol, {
+                    holding: holdingFor(item.symbol),
+                  });
+            await recordVerdict(item.symbol, item.mode, result.verdict);
             window.dispatchEvent(new Event("watchlist:change"));
           } catch (e) {
             console.error("[watchlist poller]", item.symbol, e);
@@ -286,6 +339,16 @@ export default function ResearchEngine() {
       )}
     </div>
   );
+}
+
+function safeJsonArray(raw: string | null): unknown[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function EmptyState({ mode }: { mode: AssetMode }) {

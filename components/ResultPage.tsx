@@ -10,6 +10,7 @@ import VerdictCard from "./VerdictCard";
 import { AGENTS } from "@/lib/agents";
 import { cacheTtlMs } from "@/lib/orchestrator";
 import { fmtPrice, pct, pctColor, timeUntil } from "@/lib/format";
+import { signIn, useSession } from "next-auth/react";
 import { isWatched, markSeen, toggleWatch } from "@/lib/watchlist";
 import type {
   AgentFinding,
@@ -91,24 +92,43 @@ export default function ResultPage({
   const cachedAt = result?.cachedAt;
   const refreshesIn = cachedAt ? timeUntil(cachedAt + cacheTtlMs) : null;
 
+  const { status: sessionStatus } = useSession();
+  const signedIn = sessionStatus === "authenticated";
+
   const [watched, setWatched] = useState(false);
   useEffect(() => {
-    setWatched(isWatched(symbol, mode));
-  }, [symbol, mode]);
+    let cancelled = false;
+    if (!signedIn) {
+      setWatched(false);
+      return;
+    }
+    void isWatched(symbol, mode).then((v) => {
+      if (!cancelled) setWatched(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [symbol, mode, signedIn]);
 
   // Once a verdict is rendered, mark the row as seen so the watchlist delta
   // badge clears on view.
   useEffect(() => {
-    if (verdict) {
-      markSeen(symbol, mode);
-      window.dispatchEvent(new Event("watchlist:change"));
+    if (verdict && signedIn) {
+      void markSeen(symbol, mode).then(() => {
+        window.dispatchEvent(new Event("watchlist:change"));
+      });
     }
-  }, [verdict, symbol, mode]);
+  }, [verdict, symbol, mode, signedIn]);
 
   function onToggleStar() {
-    const next = toggleWatch(symbol, mode);
-    setWatched(next);
-    window.dispatchEvent(new Event("watchlist:change"));
+    if (!signedIn) {
+      void signIn("google");
+      return;
+    }
+    void toggleWatch(symbol, mode).then((next) => {
+      setWatched(next);
+      window.dispatchEvent(new Event("watchlist:change"));
+    });
   }
 
   return (
@@ -121,8 +141,20 @@ export default function ResultPage({
             </h1>
             <button
               onClick={onToggleStar}
-              aria-label={watched ? "Remove from watchlist" : "Add to watchlist"}
-              title={watched ? "Remove from watchlist" : "Add to watchlist"}
+              aria-label={
+                !signedIn
+                  ? "Sign in to save"
+                  : watched
+                  ? "Remove from watchlist"
+                  : "Add to watchlist"
+              }
+              title={
+                !signedIn
+                  ? "Sign in to save"
+                  : watched
+                  ? "Remove from watchlist"
+                  : "Add to watchlist"
+              }
               className="text-[18px] leading-none transition-colors"
               style={{ color: watched ? "#fbbf24" : "#4a5170" }}
             >

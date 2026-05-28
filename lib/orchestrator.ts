@@ -1,6 +1,6 @@
 import { getAgent } from "./agents";
 import { findCoinBySymbol, LIVE_DATA } from "./cryptoData";
-import { getHolding } from "./portfolio";
+import type { PortfolioHolding } from "./types";
 import type {
   AgentFinding,
   AgentSignal,
@@ -851,12 +851,16 @@ function parseVerdict(raw: string): Verdict {
 
 export async function runStockResearch(
   ticker: string,
-  opts: { force?: boolean; onProgress?: ProgressFn } = {}
+  opts: {
+    force?: boolean;
+    onProgress?: ProgressFn;
+    holding?: PortfolioHolding;
+  } = {}
 ): Promise<StockResearchResult> {
   const key = ticker.toUpperCase();
   // Position-aware verdicts shouldn't be served from (or saved to) the bare
   // ticker cache — same NVDA query produces different verdicts when held vs not.
-  const holding = getHolding(key);
+  const { holding } = opts;
   if (!opts.force && !holding) {
     const cached = getCached<StockResearchResult>(key);
     if (cached) return cached;

@@ -82,16 +82,16 @@ flowchart TD
 - **Two TTLs, not one.** Raw market data (`/quote`, `/company-news`) churns hourly; synthesized verdicts hold up for 4 hours. Mixing them into one TTL wastes Anthropic calls or serves stale prices — separating them gets you the cheap freshness *and* the cheap reuse.
 - **Cost-basis-aware verdicts.** When `getHolding(ticker)` returns a position, the orchestrator skips the bare-ticker cache key and injects an explicit "user holds N shares at $X avg" block into the Hub prompt. A "BUY" recommendation reads very differently when you're already 40% up — the model needs to know.
 - **Structured agent output.** Each runner appends `STRUCTURED_FORMAT` to its system prompt and the result flows through `parseAgentResponse` which tolerates Claude phrasing drift. UI cards render headline + signal pill + bullets when parsing succeeds, falling back to raw text when it doesn't.
-- **Client-side persistence for v1.** Watchlist + portfolio live in `localStorage` today — zero infra, fastest path to a live demo. Phase B (in progress) migrates them to Postgres behind Google sign-in; the module shapes are designed for a drop-in swap.
-- **In-memory rate limit on `/api/chat`.** Accepts that Vercel cold starts reset the counter; that's a fine trade-off for hobby traffic. Phase B replaces this with per-account quotas — the rate limiter goes away when sign-in lands.
+- **Per-user persistence behind Google sign-in.** Watchlist + portfolio are server-backed in Neon Postgres (Drizzle ORM), gated by NextAuth + Google. Search and verdict stay fully public so anon recruiters can demo end-to-end. A one-time client-side migrator imports any pre-existing localStorage data on first sign-in, so power users don't lose their earlier state.
+- **Session-aware rate limit on `/api/chat`.** Anon users get an IP-keyed sliding window (20/hour); signed-in users get a generous per-account daily quota (200/day). Same `lib/rateLimit.ts` helper, different key prefixes.
 
 ---
 
 ## Tech stack
 
-**Next.js 14** (App Router) · **TypeScript** strict · **Tailwind CSS** · **Anthropic Claude** (Sonnet 4) · **Finnhub** · **CoinGecko** · **Vercel**
+**Next.js 14** (App Router) · **TypeScript** strict · **Tailwind CSS** · **Anthropic Claude** (Sonnet 4) · **Finnhub** · **CoinGecko** · **NextAuth v5** (Google) · **Neon Postgres** · **Drizzle ORM** · **Vercel**
 
-No external state library. No tooltip / popover library. No Redux, no Zustand. Just `useState` / `useEffect`, `localStorage`, and a couple of `CustomEvent`s.
+No external state library. No tooltip / popover library. No Redux, no Zustand. Just `useState` / `useEffect`, server-fetched per-user state, and a couple of `CustomEvent`s for cross-tab sync.
 
 ---
 
@@ -109,9 +109,19 @@ npm run dev                        # http://localhost:3000
 |---|---|---|
 | `ANTHROPIC_API_KEY` | All Claude calls (agent runners, Intelligence Hub) | console.anthropic.com |
 | `NEXT_PUBLIC_FINNHUB_KEY` | Stock quotes, company news, earnings, fundamentals | finnhub.io/dashboard |
-| `PMI_JWT` | Heisenberg prediction-market queries (idle / manual only) | narrative.agent.heisenberg.so → DevTools → Network → `Authorization` header. **Expires periodically — paste a fresh one when calls 401.** Optional in the default auto-run flow. |
+| `AUTH_SECRET` | NextAuth JWT signing | `openssl rand -base64 32` |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth for watchlist + portfolio sign-in | console.cloud.google.com → APIs & Services → Credentials → OAuth 2.0 Client ID (Web) |
+| `DATABASE_URL` | Neon Postgres for per-user watchlist + portfolio | Vercel dashboard → Storage → Create Neon → connect to project; pull locally with `npx vercel env pull .env.local` |
+| `PMI_JWT` | Heisenberg prediction markets (idle / manual only — optional) | narrative.agent.heisenberg.so → DevTools → Network → `Authorization` header. **Expires periodically.** |
 
 `.env.local` is gitignored. Never put real keys in `.env.local.example`.
+
+### Database migrations (Drizzle)
+
+```bash
+npx drizzle-kit generate    # produces SQL in db/migrations/
+npx drizzle-kit push        # applies schema to DATABASE_URL
+```
 
 ### Project layout
 
@@ -164,9 +174,8 @@ components/
 
 ## What's next
 
-- **Phase B (in progress)** — Google sign-in via NextAuth + Postgres backing watchlist/portfolio; per-user data persists across devices; search/verdict stays public so the demo is frictionless
 - **Tests + CI** — Vitest unit on `parseAgentResponse` / `parseNewsEventsResponse` / verdict regex / cache helpers, Playwright e2e on search → verdict, GitHub Actions for typecheck/lint/test/build on every push
-- **Server-side cron** — Vercel Cron re-runs research on watchlist tickers daily, surfaces verdict changes via email digest
+- **Server-side cron** — Vercel Cron re-runs research on every signed-in user's watchlist daily; surfaces verdict changes via email digest
 - **Streaming Claude responses** — SSE on `/api/chat` so finding cards materialize token-by-token
 - **Sentry + structured logging**
 - **Schwab OAuth** — replace manual portfolio entry with real brokerage sync

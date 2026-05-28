@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import AgentStatusList from "./AgentStatusList";
+import AuthButton from "./AuthButton";
 import WatchlistSection from "./WatchlistSection";
 import type { AssetMode, RunStatus } from "@/lib/types";
 
@@ -81,6 +82,8 @@ export default function SearchSidebar({
 
   return (
     <aside className="w-[260px] shrink-0 border-r border-border bg-bg-panel p-4 flex flex-col gap-5 overflow-y-auto">
+      <AuthButton />
+
       <form onSubmit={submit} className="flex flex-col gap-2">
         <label className="text-[10px] uppercase tracking-[0.12em] text-text-dim font-mono">
           Search

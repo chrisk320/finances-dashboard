@@ -15,11 +15,17 @@ export default function PositionPanel({
   const [holding, setHolding] = useState<PortfolioHolding | undefined>(undefined);
 
   useEffect(() => {
-    setHolding(getHolding(symbol));
-    const sync = () => setHolding(getHolding(symbol));
+    let cancelled = false;
+    const sync = () => {
+      void getHolding(symbol).then((h) => {
+        if (!cancelled) setHolding(h);
+      });
+    };
+    sync();
     window.addEventListener("storage", sync);
     window.addEventListener("portfolio:change", sync);
     return () => {
+      cancelled = true;
       window.removeEventListener("storage", sync);
       window.removeEventListener("portfolio:change", sync);
     };
