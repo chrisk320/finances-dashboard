@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import AgentsGrid from "./AgentsGrid";
+import MarketOverview from "./MarketOverview";
 import PortfolioView from "./PortfolioView";
 import ResultPage from "./ResultPage";
 import SearchSidebar, { pushRecent } from "./SearchSidebar";
@@ -29,11 +30,11 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000;
 const BACKGROUND_DELAY_MS = 1500;
 const MIGRATED_FLAG = "migrated:v1";
 
-type Tab = "stocks" | "crypto" | "portfolio" | "agents";
+type Tab = "markets" | "stocks" | "crypto" | "portfolio" | "agents";
 
 export default function ResearchEngine() {
   const { status: sessionStatus } = useSession();
-  const [tab, setTab] = useState<Tab>("stocks");
+  const [tab, setTab] = useState<Tab>("markets");
   const [stockSymbol, setStockSymbol] = useState<string | null>(null);
   const [cryptoSymbol, setCryptoSymbol] = useState<string | null>(null);
   const [stockResult, setStockResult] = useState<StockResearchResult | null>(null);
@@ -285,7 +286,7 @@ export default function ResearchEngine() {
         <div className="text-[13px] font-mono font-bold tracking-wide text-text-primary mr-6">
           ⌁ Research Engine
         </div>
-        {(["stocks", "crypto", "portfolio", "agents"] as Tab[]).map((t) => (
+        {(["markets", "stocks", "crypto", "portfolio", "agents"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -303,7 +304,14 @@ export default function ResearchEngine() {
         </div>
       </nav>
 
-      {tab === "agents" ? (
+      {tab === "markets" ? (
+        <MarketOverview
+          onOpenTicker={(t) => {
+            setTab("stocks");
+            handleSearch(t);
+          }}
+        />
+      ) : tab === "agents" ? (
         <AgentsGrid />
       ) : tab === "portfolio" ? (
         <PortfolioView

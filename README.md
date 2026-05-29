@@ -14,6 +14,7 @@ A search-driven research engine for a **long-term, buy-and-hold equity investor*
 
 Beyond the core search loop the app also ships:
 
+- **Markets homepage** — the default landing tab: an AI market briefing (server-cached so it costs ~one Claude call per 30 min), a 6-month S&P 500 chart, session-aware movers (your watchlist/portfolio when signed in, real market-wide gainers/losers when signed out), an 11-sector performance heatmap, a session-aware earnings-this-week calendar, and live market + sector headlines. Click any ticker, sector, or headline to jump into research.
 - **Valuation panel** — P/E, EV/EBITDA, FCF margin, ROE, D/E, etc. with color-coded benchmark bands and `?` glossary tooltips
 - **News Analyst** — recent company + sector headlines tagged Helps / Mixed / Hurts the long-term thesis
 - **Watchlist** — star a ticker, 5-minute background poller flags verdict changes
@@ -112,6 +113,7 @@ npm run dev                        # http://localhost:3000
 | `AUTH_SECRET` | NextAuth JWT signing | `openssl rand -base64 32` |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth for watchlist + portfolio sign-in | console.cloud.google.com → APIs & Services → Credentials → OAuth 2.0 Client ID (Web) |
 | `DATABASE_URL` | Neon Postgres for per-user watchlist + portfolio | Vercel dashboard → Storage → Create Neon → connect to project; pull locally with `npx vercel env pull .env.local` |
+| `FMP_API_KEY` | Markets homepage: signed-out "real market movers" + the S&P 500 chart (optional — movers fall back to the curated basket, chart falls back to Yahoo) | financialmodelingprep.com (free key) |
 | `PMI_JWT` | Heisenberg prediction markets (idle / manual only — optional) | narrative.agent.heisenberg.so → DevTools → Network → `Authorization` header. **Expires periodically.** |
 
 `.env.local` is gitignored. Never put real keys in `.env.local.example`.

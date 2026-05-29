@@ -13,7 +13,9 @@ function init(): NeonHttpDatabase<Schema> {
   if (!url) {
     throw new Error("DATABASE_URL or POSTGRES_URL must be set");
   }
-  _sql = neon(url);
+  // `cache: no-store` stops Next.js from caching the driver's query fetches —
+  // otherwise a stale (e.g. empty) result can be served regardless of DB state.
+  _sql = neon(url, { fetchOptions: { cache: "no-store" } });
   _db = drizzle(_sql, { schema });
   return _db;
 }

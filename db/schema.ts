@@ -32,3 +32,12 @@ export const portfolioHoldings = pgTable(
     pk: primaryKey({ columns: [t.userId, t.ticker] }),
   }),
 );
+
+// Single-row cache for the daily market briefing — survives Vercel cold starts
+// so the Claude agent runs at most once per ET day across all instances.
+export const marketBriefing = pgTable("market_briefing", {
+  id: text("id").primaryKey(), // always "global"
+  briefing: text("briefing").notNull(),
+  day: text("day").notNull(), // ET date "YYYY-MM-DD"
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});
