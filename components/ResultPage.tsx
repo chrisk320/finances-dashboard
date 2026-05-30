@@ -9,7 +9,8 @@ import ValuationPanel from "./ValuationPanel";
 import VerdictCard from "./VerdictCard";
 import { AGENTS } from "@/lib/agents";
 import { cacheTtlMs } from "@/lib/orchestrator";
-import { fmtPrice, pct, pctColor, timeUntil } from "@/lib/format";
+import { useLivePrice } from "@/lib/useLivePrice";
+import { fmtPrice, pct, pctColor, timeAgo, timeUntil } from "@/lib/format";
 import { signIn, useSession } from "next-auth/react";
 import { isWatched, markSeen, toggleWatch } from "@/lib/watchlist";
 import type {
@@ -81,12 +82,20 @@ export default function ResultPage({
   const cryptoResult = isCrypto ? (result as CryptoResearchResult | null) : null;
   const stockResult = !isCrypto ? (result as StockResearchResult | null) : null;
 
-  const price = isCrypto
+  const seedPrice = isCrypto
     ? cryptoResult?.priceData.price ?? 0
     : stockResult?.quote.price ?? 0;
-  const changePct = isCrypto
+  const seedChangePct = isCrypto
     ? cryptoResult?.priceData.change24h ?? 0
     : stockResult?.quote.changePct ?? 0;
+
+  // Live-polling price (visibility-aware) seeded from the research snapshot.
+  const {
+    price: livePrice,
+    changePct,
+    asOf: priceAsOf,
+  } = useLivePrice({ symbol, mode, seedPrice, seedChangePct });
+  const price = livePrice;
 
   const cachedAt = result?.cachedAt;
   const refreshesIn = cachedAt ? timeUntil(cachedAt + cacheTtlMs) : null;
@@ -174,6 +183,16 @@ export default function ResultPage({
                   style={{ color: pctColor(changePct) }}
                 >
                   {pct(changePct)}
+                </span>
+                <span
+                  className="flex items-center gap-1.5 text-[10px] font-mono text-text-muted"
+                  title="Price polls live while this tab is open"
+                >
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-[#4ade80] opacity-75 animate-ping" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#4ade80]" />
+                  </span>
+                  live · {timeAgo(priceAsOf)}
                 </span>
               </div>
               {!isCrypto && (
