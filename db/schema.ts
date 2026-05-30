@@ -41,3 +41,12 @@ export const marketBriefing = pgTable("market_briefing", {
   day: text("day").notNull(), // ET date "YYYY-MM-DD"
   updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
 });
+
+// Single-row cache for the daily Markets headline digest (curated + explained).
+// Same once-per-ET-day, cold-start-safe pattern as marketBriefing.
+export const marketDigest = pgTable("market_digest", {
+  id: text("id").primaryKey(), // always "global"
+  items: text("items").notNull(), // JSON.stringify(MarketDigestItem[])
+  day: text("day").notNull(), // ET date "YYYY-MM-DD"
+  updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
+});

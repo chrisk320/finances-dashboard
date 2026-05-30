@@ -50,12 +50,19 @@ export default function ResearchEngine() {
   const currentResult = mode === "crypto" ? cryptoResult : stockResult;
 
   const runResearch = useCallback(
-    async (symbol: string, opts: { force?: boolean } = {}) => {
+    async (
+      symbol: string,
+      opts: { force?: boolean; mode?: AssetMode } = {},
+    ) => {
+      // Explicit mode override lets callers (e.g. the Markets tab) research a
+      // coin/ticker without relying on the current tab's mode, which would be
+      // stale right after setTab().
+      const m = opts.mode ?? mode;
       setLoading(true);
       setError(null);
       setLiveFindings([]);
       setStatus({});
-      if (mode === "crypto") {
+      if (m === "crypto") {
         setCryptoSymbol(symbol);
         setCryptoResult(null);
       } else {
@@ -78,13 +85,13 @@ export default function ResearchEngine() {
       };
 
       try {
-        if (mode === "crypto") {
+        if (m === "crypto") {
           const res = await runCryptoResearch(symbol, {
             force: opts.force,
             onProgress,
           });
           setCryptoResult(res);
-          void recordVerdict(symbol, mode, res.verdict);
+          void recordVerdict(symbol, m, res.verdict);
         } else {
           const portfolio = await loadPortfolio();
           const holding = portfolio.find(
@@ -96,9 +103,9 @@ export default function ResearchEngine() {
             holding,
           });
           setStockResult(res);
-          void recordVerdict(symbol, mode, res.verdict);
+          void recordVerdict(symbol, m, res.verdict);
         }
-        pushRecent(symbol, mode);
+        pushRecent(symbol, m);
         window.dispatchEvent(new Event("watchlist:change"));
       } catch (e: any) {
         setError(e?.message ?? "Research failed.");
@@ -308,7 +315,11 @@ export default function ResearchEngine() {
         <MarketOverview
           onOpenTicker={(t) => {
             setTab("stocks");
-            handleSearch(t);
+            void runResearch(t.trim().toUpperCase(), { mode: "stocks" });
+          }}
+          onOpenCoin={(t) => {
+            setTab("crypto");
+            void runResearch(t.trim().toUpperCase(), { mode: "crypto" });
           }}
         />
       ) : tab === "agents" ? (

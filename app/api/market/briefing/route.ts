@@ -2,12 +2,34 @@ import Anthropic from "@anthropic-ai/sdk";
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { marketBriefing } from "@/db/schema";
+import { etDay } from "@/lib/marketDay";
 
 export const dynamic = "force-dynamic";
 
-const ROW_ID = "global";
 const LONG_TERM_SUFFIX =
   " You are writing for a long-term, buy-and-hold investor with a 3-10 year horizon. Filter out short-term noise; focus on what affects the multi-year picture.";
+
+// Stocks and crypto briefings share the market_briefing table as two rows.
+type Kind = "stocks" | "crypto";
+const CONFIG: Record<
+  Kind,
+  { rowId: string; newsCategory: string; system: string }
+> = {
+  stocks: {
+    rowId: "global",
+    newsCategory: "general",
+    system:
+      "You are the Market Researcher agent. Write a tight 3-4 sentence market briefing from today's headlines. Lead with the single most important theme. Be specific and plain-spoken; no preamble, no bullet points, no markdown." +
+      LONG_TERM_SUFFIX,
+  },
+  crypto: {
+    rowId: "crypto",
+    newsCategory: "crypto",
+    system:
+      "You are the Crypto Market Researcher agent. Write a tight 3-4 sentence crypto market briefing from today's headlines. Lead with the single most important theme (e.g. Bitcoin, regulation, ETF flows, major tokens). Be specific and plain-spoken; no preamble, no bullet points, no markdown." +
+      LONG_TERM_SUFFIX,
+  },
+};
 
 let anthropic: Anthropic | null = null;
 
@@ -20,19 +42,12 @@ function getClient(): Anthropic {
   return anthropic;
 }
 
-// Current market day in US/Eastern as YYYY-MM-DD.
-function etDay(): string {
-  return new Date().toLocaleDateString("en-CA", {
-    timeZone: "America/New_York",
-  });
-}
-
-async function fetchHeadlines(): Promise<string[]> {
+async function fetchHeadlines(category: string): Promise<string[]> {
   const key = process.env.NEXT_PUBLIC_FINNHUB_KEY ?? process.env.FINNHUB_KEY;
   if (!key) return [];
   try {
     const res = await fetch(
-      `https://finnhub.io/api/v1/news?category=general&token=${key}`,
+      `https://finnhub.io/api/v1/news?category=${category}&token=${key}`,
       { next: { revalidate: 600 } },
     );
     if (!res.ok) return [];
@@ -48,40 +63,40 @@ async function fetchHeadlines(): Promise<string[]> {
   }
 }
 
-async function generateBriefing(): Promise<string> {
-  const headlines = await fetchHeadlines();
+async function generateBriefing(cfg: (typeof CONFIG)[Kind]): Promise<string> {
+  const headlines = await fetchHeadlines(cfg.newsCategory);
   if (headlines.length === 0) return "";
 
-  const system =
-    "You are the Market Researcher agent. Write a tight 3-4 sentence market briefing from today's headlines. Lead with the single most important theme. Be specific and plain-spoken; no preamble, no bullet points, no markdown." +
-    LONG_TERM_SUFFIX;
-  const user = `Today's market headlines:\n${headlines
+  const user = `Today's headlines:\n${headlines
     .map((h) => `- ${h}`)
     .join("\n")}\n\nWrite the briefing now.`;
 
   const response = await getClient().messages.create({
     model: "claude-sonnet-4-20250514",
     max_tokens: 400,
-    system,
+    system: cfg.system,
     messages: [{ role: "user", content: user }],
   });
   return response.content.find((b) => b.type === "text")?.text?.trim() ?? "";
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const kind: Kind = searchParams.get("kind") === "crypto" ? "crypto" : "stocks";
+  const cfg = CONFIG[kind];
   const today = etDay();
 
   try {
     const [row] = await db
       .select()
       .from(marketBriefing)
-      .where(eq(marketBriefing.id, ROW_ID));
+      .where(eq(marketBriefing.id, cfg.rowId));
 
     if (row && row.day === today && row.briefing) {
       return Response.json({ briefing: row.briefing, asOf: row.updatedAt });
     }
 
-    const briefing = await generateBriefing();
+    const briefing = await generateBriefing(cfg);
     if (!briefing) {
       // Transient failure — don't persist a blank; retry next request.
       return Response.json({ briefing: "", asOf: Date.now() });
@@ -90,7 +105,7 @@ export async function GET() {
     const asOf = Date.now();
     await db
       .insert(marketBriefing)
-      .values({ id: ROW_ID, briefing, day: today, updatedAt: asOf })
+      .values({ id: cfg.rowId, briefing, day: today, updatedAt: asOf })
       .onConflictDoUpdate({
         target: marketBriefing.id,
         set: { briefing, day: today, updatedAt: asOf },

@@ -74,6 +74,17 @@ export type NewsEvent = {
   rationale: string;
 };
 
+// One curated, explained market headline for the Markets-page AI digest.
+export type MarketDigestItem = {
+  headline: string;
+  url: string;
+  source: string;
+  datetime: number; // unix seconds
+  related: string; // ticker if present, else ""
+  impact: NewsImpact;
+  whyItMatters: string; // plain-English, < 20 words
+};
+
 export type StockResearchResult = {
   ticker: string;
   quote: Quote;

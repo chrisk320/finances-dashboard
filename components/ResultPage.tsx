@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import AgentFindingCard from "./AgentFindingCard";
 import NewsEventsPanel from "./NewsEventsPanel";
 import PositionPanel from "./PositionPanel";
-import Sparkline from "./Sparkline";
+import PriceChart from "./PriceChart";
 import ValuationPanel from "./ValuationPanel";
 import VerdictCard from "./VerdictCard";
 import { AGENTS } from "@/lib/agents";
@@ -87,7 +87,6 @@ export default function ResultPage({
   const changePct = isCrypto
     ? cryptoResult?.priceData.change24h ?? 0
     : stockResult?.quote.changePct ?? 0;
-  const sparkline = isCrypto ? cryptoResult?.priceData.sparkline : undefined;
 
   const cachedAt = result?.cachedAt;
   const refreshesIn = cachedAt ? timeUntil(cachedAt + cacheTtlMs) : null;
@@ -176,14 +175,6 @@ export default function ResultPage({
                 >
                   {pct(changePct)}
                 </span>
-                {sparkline && sparkline.length > 1 && (
-                  <Sparkline
-                    data={sparkline}
-                    color={pctColor(changePct)}
-                    width={120}
-                    height={30}
-                  />
-                )}
               </div>
               {!isCrypto && (
                 <span className="text-[10px] uppercase tracking-[0.12em] text-text-dim font-mono">
@@ -214,6 +205,8 @@ export default function ResultPage({
           {error}
         </div>
       )}
+
+      <PriceChart symbol={symbol} mode={mode} />
 
       {!isCrypto && (
         <PositionPanel symbol={symbol} currentPrice={price} />

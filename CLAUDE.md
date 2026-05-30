@@ -419,6 +419,9 @@ Agent accent colors:
 | Heisenberg PMI wallets | Live | Agent 584 |
 | Heisenberg PMI trades | Live | Agent 556 |
 | Claude verdicts + findings | Live | Via `/api/chat` |
+| Price charts (1M/6M/1Y) | Live | `/api/market/history` — every researched asset shows a range-selectable chart; stocks via FMP→Yahoo fallback, crypto via CoinGecko `market_chart` |
+| Markets headline digest | Live (daily) | `/api/market/digest` — Claude curates the top ~6 general headlines with a plain-English "why it matters" + Positive/Neutral/Negative tag for new investors; DB-cached once per ET day (`market_digest`), same pattern as the briefing. Sector headlines stay raw, collapsed below it |
+| Markets Stocks/Crypto toggle | Live | The Markets tab has a Stocks (default) / Crypto toggle. Crypto view = daily crypto briefing (`/api/market/briefing?kind=crypto`, a 2nd row of `market_briefing`) + global stats + top-10 by market cap + 24h movers from `/api/market/crypto` (CoinGecko, seeded `LIVE_DATA` fallback). Clicking a coin opens it in crypto research mode |
 
 ---
 

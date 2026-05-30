@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import LineChart from "./LineChart";
+import MarketDigest from "./MarketDigest";
+import CryptoStats from "./CryptoStats";
+import CoinList, { type CoinRow } from "./CoinList";
 import { fmtPrice, pct, pctColor, timeAgo } from "@/lib/format";
+import type { MarketDigestItem } from "@/lib/types";
+import type { GlobalMarket } from "@/lib/cryptoData";
 
 type Mover = {
   ticker: string;
@@ -81,10 +87,21 @@ type NewsData = {
   asOf: number;
 };
 type BriefingData = { briefing: string; asOf: number };
+type DigestData = { items: MarketDigestItem[]; asOf: number };
+type CryptoMarketData = {
+  global: GlobalMarket | null;
+  top: CoinRow[];
+  gainers: Mover[];
+  losers: Mover[];
+  asOf: number;
+};
 
 // Persists across Markets-tab remounts within a page session so switching tabs
-// back to Markets reuses the briefing without a re-fetch or a shimmer flash.
+// back to Markets reuses these without a re-fetch or a shimmer flash.
 let cachedBriefing: BriefingData | null = null;
+let cachedDigest: DigestData | null = null;
+let cachedCryptoMarket: CryptoMarketData | null = null;
+let cachedCryptoBriefing: BriefingData | null = null;
 
 async function getJson<T>(url: string): Promise<T | null> {
   try {
@@ -98,22 +115,31 @@ async function getJson<T>(url: string): Promise<T | null> {
 
 export default function MarketOverview({
   onOpenTicker,
+  onOpenCoin,
 }: {
   onOpenTicker: (ticker: string) => void;
+  onOpenCoin: (symbol: string) => void;
 }) {
   const { status: sessionStatus } = useSession();
+  const [view, setView] = useState<"stocks" | "crypto">("stocks");
   const [movers, setMovers] = useState<MoversData | null>(null);
   const [news, setNews] = useState<NewsData | null>(null);
   const [briefing, setBriefing] = useState<BriefingData | null>(null);
+  const [digest, setDigest] = useState<DigestData | null>(null);
   const [sp500, setSp500] = useState<Sp500Data | null>(null);
   const [sectors, setSectors] = useState<SectorsData | null>(null);
   const [earnings, setEarnings] = useState<EarningsData | null>(null);
+  const [cryptoMarket, setCryptoMarket] = useState<CryptoMarketData | null>(null);
+  const [cryptoBriefing, setCryptoBriefing] = useState<BriefingData | null>(null);
   const [moversLoading, setMoversLoading] = useState(true);
   const [newsLoading, setNewsLoading] = useState(true);
   const [briefingLoading, setBriefingLoading] = useState(true);
+  const [digestLoading, setDigestLoading] = useState(true);
   const [sp500Loading, setSp500Loading] = useState(true);
   const [sectorsLoading, setSectorsLoading] = useState(true);
   const [earningsLoading, setEarningsLoading] = useState(true);
+  const [cryptoLoading, setCryptoLoading] = useState(true);
+  const [cryptoBriefingLoading, setCryptoBriefingLoading] = useState(true);
 
   // User-agnostic sections: fetch once on mount.
   useEffect(() => {
@@ -132,6 +158,17 @@ export default function MarketOverview({
         if (d) cachedBriefing = d;
         setBriefing(d);
         setBriefingLoading(false);
+      });
+    }
+    if (cachedDigest) {
+      setDigest(cachedDigest);
+      setDigestLoading(false);
+    } else {
+      void getJson<DigestData>("/api/market/digest").then((d) => {
+        if (cancelled) return;
+        if (d) cachedDigest = d;
+        setDigest(d);
+        setDigestLoading(false);
       });
     }
     void getJson<Sp500Data>("/api/market/sp500").then((d) => {
@@ -170,6 +207,38 @@ export default function MarketOverview({
     };
   }, [sessionStatus]);
 
+  // Crypto sections: fetched lazily the first time the Crypto view is opened,
+  // then reused from module cache (user-agnostic, so never refetched per session).
+  useEffect(() => {
+    if (view !== "crypto") return;
+    let cancelled = false;
+    if (cachedCryptoMarket) {
+      setCryptoMarket(cachedCryptoMarket);
+      setCryptoLoading(false);
+    } else {
+      void getJson<CryptoMarketData>("/api/market/crypto").then((d) => {
+        if (cancelled) return;
+        if (d) cachedCryptoMarket = d;
+        setCryptoMarket(d);
+        setCryptoLoading(false);
+      });
+    }
+    if (cachedCryptoBriefing) {
+      setCryptoBriefing(cachedCryptoBriefing);
+      setCryptoBriefingLoading(false);
+    } else {
+      void getJson<BriefingData>("/api/market/briefing?kind=crypto").then((d) => {
+        if (cancelled) return;
+        if (d) cachedCryptoBriefing = d;
+        setCryptoBriefing(d);
+        setCryptoBriefingLoading(false);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
+
   return (
     <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-5">
       <header>
@@ -181,6 +250,25 @@ export default function MarketOverview({
         </h1>
       </header>
 
+      {/* Stocks / Crypto toggle */}
+      <div className="flex gap-1 font-mono">
+        {(["stocks", "crypto"] as const).map((v) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            className={`text-[11px] uppercase tracking-[0.1em] rounded-md px-3 py-1.5 transition-colors ${
+              v === view
+                ? "bg-[#1a1d2e] text-text-primary"
+                : "text-text-muted hover:text-text-secondary hover:bg-[#15182a]"
+            }`}
+          >
+            {v}
+          </button>
+        ))}
+      </div>
+
+      {view === "stocks" && (
+        <>
       {/* Briefing */}
       <section className="bg-bg-card border border-border rounded-xl px-5 py-4">
         <div className="text-[10px] uppercase tracking-[0.14em] text-text-dim font-mono mb-2">
@@ -313,20 +401,44 @@ export default function MarketOverview({
         )}
       </section>
 
-      {/* Headlines */}
+      {/* What matters today — AI digest */}
       <section>
         <h2 className="text-[10px] uppercase tracking-[0.14em] text-text-dim font-mono mb-3">
-          Headlines
+          What matters today
+          {digest?.asOf ? (
+            <span className="ml-2 text-text-muted normal-case tracking-normal">
+              · as of {timeAgo(digest.asOf)}
+            </span>
+          ) : null}
         </h2>
-        {newsLoading ? (
-          <Shimmer lines={5} />
-        ) : news && (news.general.length > 0 || news.sectors.length > 0) ? (
-          <div className="flex flex-col gap-4">
-            <HeadlineGroup
-              label="Market"
-              items={news.general}
-              onOpenTicker={onOpenTicker}
-            />
+        {digestLoading ? (
+          <Shimmer lines={4} />
+        ) : digest && digest.items.length > 0 ? (
+          <MarketDigest items={digest.items} onOpenTicker={onOpenTicker} />
+        ) : news && news.general.length > 0 ? (
+          // Fallback: raw market headlines if the digest is unavailable.
+          <HeadlineGroup
+            label="Market"
+            items={news.general}
+            onOpenTicker={onOpenTicker}
+          />
+        ) : (
+          <div className="text-text-muted text-[12px] font-mono">
+            Headlines unavailable right now.
+          </div>
+        )}
+      </section>
+
+      {/* Sector headlines — collapsed by default */}
+      {!newsLoading && news && news.sectors.length > 0 && (
+        <details className="group">
+          <summary className="flex items-center gap-2 cursor-pointer list-none text-[10px] uppercase tracking-[0.14em] text-text-dim font-mono hover:text-text-secondary transition-colors">
+            <span className="text-text-muted transition-transform group-open:rotate-90">
+              ›
+            </span>
+            Sector headlines · {news.sectors.length} sectors
+          </summary>
+          <div className="flex flex-col gap-4 mt-3">
             {news.sectors.map((s) => (
               <HeadlineGroup
                 key={s.etf}
@@ -336,12 +448,107 @@ export default function MarketOverview({
               />
             ))}
           </div>
-        ) : (
-          <div className="text-text-muted text-[12px] font-mono">
-            Headlines unavailable right now.
-          </div>
-        )}
-      </section>
+        </details>
+      )}
+        </>
+      )}
+
+      {view === "crypto" && (
+        <>
+          {/* Crypto briefing */}
+          <section className="bg-bg-card border border-border rounded-xl px-5 py-4">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-text-dim font-mono mb-2">
+              Crypto briefing
+              {cryptoBriefing?.asOf ? (
+                <span className="ml-2 text-text-muted normal-case tracking-normal">
+                  · as of {timeAgo(cryptoBriefing.asOf)}
+                </span>
+              ) : null}
+            </div>
+            {cryptoBriefingLoading ? (
+              <Shimmer lines={3} />
+            ) : cryptoBriefing?.briefing ? (
+              <p className="text-text-secondary text-[13px] leading-relaxed">
+                {cryptoBriefing.briefing}
+              </p>
+            ) : (
+              <p className="text-text-muted text-[12px] font-mono">
+                Briefing unavailable right now.
+              </p>
+            )}
+          </section>
+
+          {/* Global market stats */}
+          <section>
+            <h2 className="text-[10px] uppercase tracking-[0.14em] text-text-dim font-mono mb-3">
+              Global market
+            </h2>
+            {cryptoLoading ? (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-[64px] rounded-xl bg-[#15182a] animate-pulse"
+                  />
+                ))}
+              </div>
+            ) : cryptoMarket?.global ? (
+              <CryptoStats global={cryptoMarket.global} />
+            ) : (
+              <div className="text-text-muted text-[12px] font-mono">
+                Market data unavailable right now.
+              </div>
+            )}
+          </section>
+
+          {/* Top 10 by market cap */}
+          <section>
+            <h2 className="text-[10px] uppercase tracking-[0.14em] text-text-dim font-mono mb-3">
+              Top 10 by market cap
+            </h2>
+            {cryptoLoading ? (
+              <Shimmer lines={6} />
+            ) : cryptoMarket && cryptoMarket.top.length > 0 ? (
+              <CoinList rows={cryptoMarket.top} onOpenCoin={onOpenCoin} />
+            ) : (
+              <div className="text-text-muted text-[12px] font-mono">
+                Coin data unavailable right now.
+              </div>
+            )}
+          </section>
+
+          {/* Crypto movers */}
+          <section>
+            <h2 className="text-[10px] uppercase tracking-[0.14em] text-text-dim font-mono mb-3">
+              Movers · 24h
+            </h2>
+            {cryptoLoading ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <MoversColumn label="Gainers" rows={[]} loading onOpenTicker={onOpenCoin} />
+                <MoversColumn label="Losers" rows={[]} loading onOpenTicker={onOpenCoin} />
+              </div>
+            ) : cryptoMarket &&
+              (cryptoMarket.gainers.length > 0 || cryptoMarket.losers.length > 0) ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <MoversColumn
+                  label="Gainers"
+                  rows={cryptoMarket.gainers}
+                  onOpenTicker={onOpenCoin}
+                />
+                <MoversColumn
+                  label="Losers"
+                  rows={cryptoMarket.losers}
+                  onOpenTicker={onOpenCoin}
+                />
+              </div>
+            ) : (
+              <div className="text-text-muted text-[12px] font-mono">
+                Movers unavailable right now.
+              </div>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }
@@ -530,40 +737,6 @@ function EarningsList({
         </button>
       ))}
     </div>
-  );
-}
-
-function LineChart({ data, color }: { data: number[]; color: string }) {
-  const W = 100;
-  const H = 30;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = max - min || 1;
-  const pts = data
-    .map(
-      (v, i) =>
-        `${(i / (data.length - 1)) * W},${H - ((v - min) / range) * H}`,
-    )
-    .join(" ");
-  return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
-      width="100%"
-      height={96}
-      aria-hidden="true"
-      className="block"
-    >
-      <polyline
-        points={pts}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
   );
 }
 
