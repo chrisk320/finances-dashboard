@@ -14,7 +14,12 @@ A search-driven research engine for a **long-term, buy-and-hold equity investor*
 
 Beyond the core search loop the app also ships:
 
-- **Markets homepage** — the default landing tab: an AI market briefing (server-cached so it costs ~one Claude call per 30 min), a 6-month S&P 500 chart, session-aware movers (your watchlist/portfolio when signed in, real market-wide gainers/losers when signed out), an 11-sector performance heatmap, a session-aware earnings-this-week calendar, and live market + sector headlines. Click any ticker, sector, or headline to jump into research.
+- **Markets homepage** — the default landing tab, with a **Stocks / Crypto** toggle:
+  - *Stocks:* an AI market briefing (generated at most once per day), a 6-month S&P 500 chart, session-aware movers (your watchlist/portfolio when signed in, real market-wide gainers/losers when signed out), an 11-sector performance heatmap, a session-aware earnings-this-week calendar, and a **"What matters today" AI digest** — the ~6 most important headlines, each tagged Positive / Neutral / Negative with a plain-English "why it matters" for new investors (raw sector headlines collapse below it).
+  - *Crypto:* a daily crypto briefing, global market stats (total market cap, 24h volume, BTC/ETH dominance), the top 10 coins by market cap, and 24h gainers/losers.
+  - Click any ticker, coin, sector, or headline to jump into research.
+- **Live price charts** — every researched stock and crypto shows a price chart with a **1M / 6M / 1Y** range toggle (stocks via Financial Modeling Prep → Yahoo fallback; crypto via CoinGecko).
+- **Live-updating price** — the result-page price + today's change poll on an interval (10s stocks / 20s crypto), pausing when the browser tab is hidden; held-position P/L updates with it.
 - **Valuation panel** — P/E, EV/EBITDA, FCF margin, ROE, D/E, etc. with color-coded benchmark bands and `?` glossary tooltips
 - **News Analyst** — recent company + sector headlines tagged Helps / Mixed / Hurts the long-term thesis
 - **Watchlist** — star a ticker, 5-minute background poller flags verdict changes
@@ -26,7 +31,7 @@ Beyond the core search loop the app also ships:
 
 | | |
 |---|---|
-| ![search](docs/screenshots/01-search.png) <br/> *Empty search · sidebar + nav* | ![crypto](docs/screenshots/03-crypto.png) <br/> *Crypto verdict with sparkline* |
+| ![search](docs/screenshots/01-search.png) <br/> *Empty search · sidebar + nav* | ![crypto](docs/screenshots/03-crypto.png) <br/> *Crypto verdict with price chart* |
 | ![portfolio](docs/screenshots/04-portfolio.png) <br/> *Portfolio · cost-basis-aware verdicts* | ![tooltip](docs/screenshots/07-tooltip.png) <br/> *Glossary tooltip on P/E TTM* |
 
 ---
@@ -69,9 +74,11 @@ flowchart TD
 
 **Request flow** — browser hits Next.js Route Handlers (`/api/chat`, `/api/finnhub`, `/api/coingecko`, `/api/pmi`); secrets stay server-side. The orchestrator fans out four agent runners via `Promise.all`, waits for all four, then calls the Hub with a structured context block.
 
-**Two-layer cache** — `next: { revalidate: 3600 }` on the raw API proxies (1h) plus a 4h `localStorage` cache on the synthesized verdict. Held tickers bypass the verdict cache so the Hub sees your live cost basis.
+**Three-layer cache** — `next: { revalidate: 3600 }` on the raw API proxies (1h), a 4h `localStorage` cache on the synthesized verdict, and a **Postgres-backed daily cache** for the expensive Markets AI artifacts (the market/crypto briefings and the headline digest). The daily cache keys on the US/Eastern calendar day and survives Vercel serverless cold starts, so those Claude calls run **at most once per day** globally instead of on every cold visit. Held tickers bypass the verdict cache so the Hub sees your live cost basis.
 
 **Cross-tab sync** — `lib/watchlist.ts` and `lib/portfolio.ts` dispatch custom events (`watchlist:change` / `portfolio:change`) on every write so a star toggled in one tab updates the other. A 5-minute watchlist poller pauses on `document.visibilityState` to avoid burning quota in background tabs.
+
+**Live price polling** — `lib/useLivePrice.ts` polls `/api/market/price` on the result page (10s stocks / 20s crypto), seeded from the research snapshot so there's no flash. It pauses when the tab is hidden and refetches immediately on return — same visibility-aware pattern as the watchlist poller.
 
 **Cost protection** — `lib/rateLimit.ts` applies an in-memory sliding-window limit (20 req / IP / hour) to `/api/chat` only. Defends the Anthropic key on a public URL until Phase B introduces per-account quotas tied to Google sign-in.
 
@@ -85,6 +92,8 @@ flowchart TD
 - **Structured agent output.** Each runner appends `STRUCTURED_FORMAT` to its system prompt and the result flows through `parseAgentResponse` which tolerates Claude phrasing drift. UI cards render headline + signal pill + bullets when parsing succeeds, falling back to raw text when it doesn't.
 - **Per-user persistence behind Google sign-in.** Watchlist + portfolio are server-backed in Neon Postgres (Drizzle ORM), gated by NextAuth + Google. Search and verdict stay fully public so anon recruiters can demo end-to-end. A one-time client-side migrator imports any pre-existing localStorage data on first sign-in, so power users don't lose their earlier state.
 - **Session-aware rate limit on `/api/chat`.** Anon users get an IP-keyed sliding window (20/hour); signed-in users get a generous per-account daily quota (200/day). Same `lib/rateLimit.ts` helper, different key prefixes.
+- **Polling, not WebSockets, for live prices.** The app runs on Vercel serverless — there's no always-on process to host a WebSocket server or hold upstream socket connections, Finnhub's WS would expose the proxied API key, and CoinGecko has no free WS. For a long-term research tool a ~10–20s polled refresh is indistinguishable from streaming, so polling wins on simplicity and cost. (Binance's free public WS is the clean future path for tick-level crypto.)
+- **Daily AI artifacts in Postgres, not an in-memory cache.** The market/crypto briefings and headline digest are expensive Claude calls that should run ~once a day. A module-level cache only helps while a serverless instance stays warm — on sparse traffic Vercel cold-starts between visits, so it would regenerate far too often. Persisting them in the existing Neon DB (keyed on the ET day) makes "once per day" hold across cold starts and instances.
 
 ---
 
@@ -132,34 +141,57 @@ app/
 ├── layout.tsx
 ├── page.tsx                    # Renders <ResearchEngine />
 └── api/
-    ├── chat/route.ts           # Anthropic proxy + IP rate limit
+    ├── chat/route.ts           # Anthropic proxy + session-aware rate limit
     ├── finnhub/route.ts        # Finnhub proxy (revalidate: 3600, no-store on /quote)
     ├── coingecko/route.ts      # CoinGecko proxy (revalidate: 3600)
-    └── pmi/route.ts            # Heisenberg PMI proxy (no cache)
+    ├── pmi/route.ts            # Heisenberg PMI proxy (no cache)
+    ├── auth/[...nextauth]/     # NextAuth v5 (Google)
+    ├── watchlist/ · portfolio/ # Per-user data (Neon Postgres via Drizzle)
+    ├── migrate/route.ts        # One-time localStorage → DB import on first sign-in
+    └── market/                 # Markets homepage + live data
+        ├── briefing/route.ts   #   AI briefing (?kind=stocks|crypto) — daily DB cache
+        ├── digest/route.ts     #   "What matters today" headline digest — daily DB cache
+        ├── crypto/route.ts     #   Global stats + top-10 + movers (CoinGecko)
+        ├── price/route.ts      #   Live price poll (Finnhub / CoinGecko)
+        ├── history/route.ts    #   Chart closes 1M/6M/1Y (FMP→Yahoo / CoinGecko)
+        ├── sp500/route.ts      #   6-month S&P 500 line
+        ├── movers/ · sectors/ · earnings/ · news/   # session-aware market sections
 
 lib/
 ├── orchestrator.ts             # runStockResearch / runCryptoResearch · Promise.all fan-out · 4h localStorage cache
 ├── agents.ts                   # AGENTS[] + AUTO_AGENT slug sets
+├── auth.ts                     # NextAuth v5 config (Google, JWT sessions)
+├── priceHistory.ts             # Shared chart-close fetchers (stock FMP→Yahoo, crypto CoinGecko)
+├── useLivePrice.ts             # Visibility-aware price polling hook
+├── marketDay.ts                # ET calendar day — daily-cache key
+├── marketUniverse.ts           # Curated mega-cap basket + sector ETFs
+├── userTickers.ts              # Union of a user's watchlist + portfolio tickers
+├── cryptoData.ts               # Seeded CoinGecko snapshot (fallback)
 ├── rateLimit.ts                # In-memory sliding-window limiter
-├── watchlist.ts                # localStorage CRUD + verdict-change detection
-├── portfolio.ts                # localStorage CRUD + CSV parser + cost-basis lookup
-├── metricsGlossary.ts          # 12 metric definitions + benchmark bands
-├── verdictStyle.ts             # Rating palette + direction helper
-└── types.ts
+├── watchlist.ts                # CRUD + verdict-change detection
+├── portfolio.ts                # CRUD + CSV parser + cost-basis lookup
+├── metricsGlossary.ts          # Metric definitions + benchmark bands
+├── verdictStyle.ts · format.ts · types.ts
+
+db/                             # Drizzle ORM + Neon Postgres
+├── client.ts                   # neon() client (no-store fetch) + lazy init
+├── schema.ts                   # watchlist · portfolio · market_briefing · market_digest
+└── migrations/
 
 components/
 ├── ResearchEngine.tsx          # Root: nav + sidebar + result + watchlist poller
+├── MarketOverview.tsx          # Markets tab: Stocks/Crypto toggle + all sections
+├── MarketDigest.tsx · CryptoStats.tsx · CoinList.tsx   # Markets sub-components
+├── PriceChart.tsx · LineChart.tsx                      # Range-toggle chart + SVG line
 ├── SearchSidebar.tsx
-├── ResultPage.tsx              # Verdict + valuation + news + agent findings
+├── ResultPage.tsx              # Live price + verdict + valuation + news + findings
 ├── VerdictCard.tsx
 ├── ValuationPanel.tsx          # P/E etc. tiles with color-coded bands
 ├── MetricTooltip.tsx           # `?` button + popover
 ├── NewsEventsPanel.tsx         # Helps / Mixed / Hurts tags grouped by scope
 ├── PortfolioView.tsx           # Manual entry + CSV paste + holdings table
 ├── PositionPanel.tsx           # Cost-basis P/L on result page when held
-├── WatchlistSection.tsx
-├── AgentFindingCard.tsx
-├── AgentStatusList.tsx
+├── WatchlistSection.tsx · AgentFindingCard.tsx · AgentStatusList.tsx
 └── ...
 ```
 
